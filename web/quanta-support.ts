@@ -194,6 +194,7 @@ export const rawCompletionItems = [
   {label: "line", type: "function"},
   {label: "setLineColor", type: "function"},
   {label: "setFigureColor", type: "function"},
+  {label: "setFps", type: "function"},
 ];
 
 export const quantaCompletion = QuantaLanguage.data.of({
