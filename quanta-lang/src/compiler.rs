@@ -2,7 +2,7 @@
 use quanta_parser::{parse_ast};
 //use crate::linear_runtime;
 use crate::program::create_program;
-use crate::utils::canvas::construct_canvas;
+use crate::utils::canvas::Canvas;
 use crate::utils::message::{CompilationMessage};
 //use crate::utils::message::{LinearCompilationMessage};
 use crate::{Compiler, runtime::Runtime};
@@ -17,8 +17,7 @@ impl Compiler {
                         CompilationMessage::create_error_message(error)
                     },
                     Ok(_) => {
-                        let (c, r) = construct_canvas();
-                        CompilationMessage::ok(Runtime::new(program, c, r).await)
+                        CompilationMessage::ok(Runtime::new(program, Canvas::new()).await)
                     }
                 }
             },

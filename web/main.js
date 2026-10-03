@@ -7,8 +7,8 @@
  *   - Create and configure the CodeMirror 6 editor with Quanta language support.
  *   - Compile Quanta source via the Rust/WASM `Compiler` on every keystroke
  *     (debounced 1 s) and on explicit Run.
- *   - Drive the canvas runtime (`canvas-runtime.js`) frame-by-frame using the
- *     block-based command stream returned by the WASM runtime.
+ *   - Run the program in the WASM runtime, which hands drawing commands to the
+ *     canvas runtime (`canvas-runtime.js`) and paces frames itself.
  *   - Wire up keyboard and mouse events so the running program can react to input.
  *   - Handle file load / save and canvas image export.
  */
@@ -55,11 +55,14 @@ import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
 //import { rustHighlighting } from "../grammar/highlight.js";
 
 const runBtn = document.getElementById("runBtn");
+const canvas = document.getElementById("canvas");
 
 /** The live WASM runtime instance; `undefined` when no program is executing. */
 let runtime = undefined;
 /** True while a program is running (controls the Run/Stop button state). */
 let isRunning = false;
+/** Incremented on every Run so a finished older run doesn't reset the UI of a newer one. */
+let currentRun = 0;
 
 // ---------------------------------------------------------------------------
 // Editor configuration
@@ -412,31 +415,12 @@ function clearErrors() {
   editor.dispatch(setDiagnostics(editor.state, []));
 }
 
-/**
- * Return a Promise that resolves after `ms` milliseconds.
- * Used to yield control between animation frames in `doRun`.
- *
- * @param {number} ms
- * @returns {Promise<void>}
- */
-export function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/** Cancel the running program and clear the runtime reference. */
+/** Stop the running program, clear the runtime reference and restore the idle UI. */
 function doStop() {
-  (async() => {
-    runtime = undefined;
-    cancelNow()
-  })();
-}
-
-/**
- * Invoke the runtime's main entry point asynchronously.
- * The runtime begins producing command blocks that `doRun` will consume.
- */
-async function startExecution() {
-  let res = runtime.execute();
+  runtime?.stop();
+  runtime = undefined;
+  cancelNow();
+  setIdleUI();
 }
 
 /**
@@ -472,19 +456,19 @@ async function executeMouse(x, y) {
  * Compile and execute the current editor source.
  *
  * Flow:
- *   1. Reset cancellation state and canvas.
+ *   1. Stop any previous program, reset cancellation state and canvas.
  *   2. Compile with a fresh WASM `Compiler`; show error and abort on failure.
- *   3. Obtain the WASM runtime and call `startExecution()`.
- *   4. Poll `runtime.get_commands()` in a loop, rendering each block via
- *      `drawScript`.  Block status codes:
- *        - `0` → frame complete (composite the buffer to the visible canvas).
- *        - `2` → program ended normally.
- *        - `3` → runtime error (show error, stop loop).
- *   5. Restore idle UI state when done.
+ *   3. Give the WASM runtime `drawScript` as its renderer and await `execute()`.
+ *      The runtime calls the renderer whenever it has drawing to show and
+ *      handles `frame()`, `sleep()` and `setFps()` timing itself.
+ *   4. Show the runtime error, if any, and restore idle UI state when done.
  */
 function doRun() {
+  const runId = ++currentRun;
   (async () => {
     try {
+      runtime?.stop();
+      runtime = undefined;
       cancelNow(false);
       isRunning = true;
       runBtn.disabled = true;
@@ -503,38 +487,24 @@ function doRun() {
         showOk(editor);
       }
       setRunningUI();
-      runtime = compilation_result.get_runtime();
-      startExecution();
-      let need_continue = true;
-      while(need_continue) {
-        if (checkIsCancelled()) { return; }
-        let blocks = runtime.get_commands();
-        for (let i = 0; i < blocks.length; i++) {
-          if (checkIsCancelled()) { return; }
-          const block = blocks[i];
-          let commands = block.get_commands();
-          let blockStatus = block.get_status();
-          drawScript(commands, blockStatus == 0);
-          if (blockStatus == 3) { // Error
-            const err = runtime.get_runtime_error();
-            showError(editor, err);
-            alertError(err);
-            need_continue = false;
-            break;
-           } else if (blockStatus == 2) { // End
-            need_continue = false;
-            break;
-           }
-          await sleep(block.sleep_for);
-
-        }
+      const activeRuntime = compilation_result.get_runtime();
+      runtime = activeRuntime;
+      activeRuntime.set_renderer((commands, present) => drawScript(commands, present));
+      await activeRuntime.execute();
+      if (runId !== currentRun || checkIsCancelled()) { return; }
+      const err = activeRuntime.get_runtime_error();
+      if (err.error_code != 0) {
+        showError(editor, err);
+        alertError(err);
       }
     } catch (e) {
       console.error(e);
       alert("Error: " + (e?.message ?? String(e)));
     } finally {
-      setIdleUI();
-      runBtn.disabled = false;
+      if (runId === currentRun) {
+        setIdleUI();
+        runBtn.disabled = false;
+      }
     }
   })();
 }

@@ -7,7 +7,7 @@
  * • canvas-runtime is mocked so we can spy on calls like `setup` and `cancelNow`.
  * • All required DOM elements (runBtn, editor, resizer, …) are pre-created
  *   in tests/setup.js, which runs before the module is imported.
- * • Exported pure utilities (sleep, fontSizeTheme, downloadFile, alertError,
+ * • Exported pure utilities (fontSizeTheme, downloadFile, alertError,
  *   showError, showOk) are imported and tested directly.
  * • DOM event handlers are exercised by dispatching events on the real elements.
  */
@@ -18,14 +18,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Module mocks – Vitest hoists these before any imports.
 // ---------------------------------------------------------------------------
 
+const mockRuntime = vi.hoisted(() => ({
+  set_renderer: vi.fn(),
+  execute: vi.fn(() => Promise.resolve()),
+  stop: vi.fn(),
+  execute_key: vi.fn(),
+  execute_mouse: vi.fn(),
+  get_runtime_error: vi.fn(() => ({ error_code: 0 })),
+}));
+
 vi.mock('../../quanta-lang/pkg/quanta_lang.js', () => {
-  const mockRuntime = {
-    execute: vi.fn(),
-    execute_key: vi.fn(),
-    execute_mouse: vi.fn(),
-    get_commands: vi.fn(() => []),
-    get_runtime_error: vi.fn(),
-  };
   return {
     default: vi.fn().mockResolvedValue(undefined), // initWasm
     Compiler: {
@@ -55,7 +57,6 @@ vi.mock('../../web/canvas-runtime.js', () => ({
 import { EditorState } from '@codemirror/state';
 
 import {
-  sleep,
   fontSizeTheme,
   downloadFile,
   alertError,
@@ -63,39 +64,7 @@ import {
   showOk,
 } from '../../web/main.js';
 
-import { setup, cancelNow } from '../../web/canvas-runtime.js';
-
-// ============================================================
-// sleep
-// ============================================================
-
-describe('sleep', () => {
-  it('returns a Promise', () => {
-    expect(sleep(0)).toBeInstanceOf(Promise);
-  });
-
-  it('resolves to undefined', async () => {
-    await expect(sleep(0)).resolves.toBeUndefined();
-  });
-
-  it('does not resolve before the delay elapses', async () => {
-    vi.useFakeTimers();
-    let resolved = false;
-    sleep(500).then(() => { resolved = true; });
-    vi.advanceTimersByTime(499);
-    await Promise.resolve(); // flush microtasks
-    expect(resolved).toBe(false);
-    vi.useRealTimers();
-  });
-
-  it('resolves after the full delay', async () => {
-    vi.useFakeTimers();
-    const p = sleep(500);
-    vi.advanceTimersByTime(500);
-    await expect(p).resolves.toBeUndefined();
-    vi.useRealTimers();
-  });
-});
+import { setup, cancelNow, drawScript } from '../../web/canvas-runtime.js';
 
 // ============================================================
 // fontSizeTheme
@@ -538,5 +507,43 @@ describe('runBtn – click handler', () => {
       () => expect(setup).toHaveBeenCalled(),
       { timeout: 2000 },
     );
+  });
+
+  it('gives the runtime a renderer that forwards to drawScript', async () => {
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(mockRuntime.execute).toHaveBeenCalled(), { timeout: 2000 });
+
+    const renderer = mockRuntime.set_renderer.mock.calls[0][0];
+    renderer(['circle 1 2 3'], true);
+    expect(drawScript).toHaveBeenCalledWith(['circle 1 2 3'], true);
+  });
+
+  it('shows the runtime error once the program finishes with one', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    mockRuntime.get_runtime_error.mockReturnValueOnce({
+      error_code: 4,
+      start_row: 1, start_column: 0, end_row: 1, end_column: 1,
+      get_error_message: () => 'Division by 0',
+    });
+
+    document.getElementById('runBtn').click();
+    await vi.waitFor(
+      () => expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('Division by 0')),
+      { timeout: 2000 },
+    );
+    alertSpy.mockRestore();
+  });
+
+  it('stops the runtime and restores the Run button when Stop is clicked', async () => {
+    const runBtn = document.getElementById('runBtn');
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {})); // never finishes
+
+    runBtn.click();
+    await vi.waitFor(() => expect(runBtn.dataset.state).toBe('stop'), { timeout: 2000 });
+
+    runBtn.click();
+    expect(mockRuntime.stop).toHaveBeenCalled();
+    expect(cancelNow).toHaveBeenCalledWith();
+    expect(runBtn.dataset.state).toBe('run');
   });
 });

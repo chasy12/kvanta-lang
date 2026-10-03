@@ -1,9 +1,8 @@
 use std::{collections::{HashMap, LinkedList}, sync::{Arc, Mutex}};
 
-use gloo_timers::future::TimeoutFuture;
 use quanta_parser::{ast::{AstBlock, AstNode, AstProgram, AstStatement, BaseValue, BaseValueType, Coords, Expression, ExpressionType, Operator, Type, UnaryOperator, VariableCall}, error::Error};
 use quanta_parser::ast::BaseType;
-use crate::utils::canvas::Canvas;
+use crate::utils::{canvas::Canvas, scheduler::Scheduler};
 //use js_sys::Math;
 use std::pin::Pin;
 use std::future::Future;
@@ -63,6 +62,7 @@ pub struct Execution {
     pub global_vars : Arc<Mutex<HashMap<String, BaseValue>>>,
     pub functions : HashMap<String, (Vec<(String, Type)>, Option<Type>, AstBlock)>,
     pub canvas    : Canvas,
+    pub scheduler : Scheduler,
     pub figure_color : Arc<Mutex<String>>,
     pub line_color : Arc<Mutex<String>>,
     pub line_width : Arc<Mutex<i32>>,
@@ -146,6 +146,7 @@ impl Execution {
             lines: self.lines.clone(),
             scope: Arc::new(Mutex::new(Scope { variables: HashMap::new(), outer_scope: Some(Arc::clone(&self.scope)) })),
             canvas: self.canvas.clone(),
+            scheduler: self.scheduler.clone(),
             global_vars: self.global_vars.clone(),
             functions: self.functions.clone(),
             figure_color: Arc::clone(&self.figure_color),
@@ -358,9 +359,8 @@ impl Execution {
             "sleep" => {
                 let sleep_time = expect_arg!("sleep", vals, 0, Int(time) => *time);
                 if sleep_time >= 0 {
-                    //thread::sleep(Duration::from_millis(1000));
-                    self.canvas.add_command(format!("sleep {}", sleep_time));
-
+                    self.canvas.flush(false);
+                    self.scheduler.sleep(sleep_time).await?;
                     Ok(None)
                 } else {
                     Err(Error::runtime(String::from("Sleep time can't be negative!"), coords))
@@ -371,8 +371,18 @@ impl Execution {
                 Ok(None)
             },
             "frame" => {
-                self.canvas.add_command(format!("frame"));
+                self.canvas.flush(true);
+                self.scheduler.wait_for_next_frame().await?;
                 Ok(None)
+            },
+            "setFps" => {
+                let fps = expect_arg!("setFps", vals, 0, Int(v) => *v);
+                if fps >= 1 {
+                    self.scheduler.set_fps(fps);
+                    Ok(None)
+                } else {
+                    Err(Error::runtime(String::from("Frame rate must be at least 1!"), coords))
+                }
             },
             "clear" => {
                 self.canvas.add_command(format!("clear"));
@@ -504,14 +514,12 @@ impl Execution {
         match self.lines {
             AstProgram::Block(ref block) => {
                 self.execute_commands(block.nodes.clone()).await?;
-                self.canvas.add_command("end".into());
             },
             AstProgram::Forest(_) => {
                 for (func_name, (_, _, block)) in &self.functions {
                     if func_name == "main" {
                         let mut new_exec = self.create_subscope();
                         new_exec.execute_commands(block.nodes.clone()).await?;
-                        self.canvas.add_command("end".into());
                         return Ok(());
                     }
                 }
@@ -562,7 +570,7 @@ impl Execution {
 
     pub fn execute_commands<'a>(&'a mut self, nodes : Vec<AstNode>) -> Pin<Box<dyn Future<Output = Result<Option<BaseValue>, Error>> + 'a>> {
         Box::pin(async move {
-            TimeoutFuture::new(1).await;
+            self.scheduler.maybe_yield(&self.canvas).await?;
             for line in nodes {
                 match line.statement {
                     AstStatement::Command { name, args } => {

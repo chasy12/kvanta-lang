@@ -109,6 +109,9 @@ pub fn create_program(ast: AstProgram) -> Program {
         ], None)),
         (String::from("animate"), (vec![], None)),
         (String::from("frame"), (vec![], None)),
+        (String::from("setFps"), (vec![
+            (String::from("fps"), int_type())
+        ], None)),
         (String::from("clear"), (vec![], None)),
         (String::from("Color::Random"), (vec![], Some(color_type()))),
         (String::from("round"), (vec![
@@ -139,7 +142,7 @@ pub fn create_program(ast: AstProgram) -> Program {
         (String::from("input"), (vec![], Some(int_type()))),
         (String::from("output"), (vec![], None)),
     ]), keywords: HashSet::from(["circle", "line", "rectangle", 
-                    "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "clear", "rgb",
+                    "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "setFps", "clear", "rgb",
                     "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output",
                     "for", "while", "global", "func", "if", "else",
                     "int", "bool", "color", "float", "array", "Color", "true", "false"

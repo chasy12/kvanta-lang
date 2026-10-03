@@ -115,9 +115,15 @@ Global blocks are accessible from all functions.
 
 ```
 animate()       -- enter animation mode (nothing renders until frame() is called)
-frame()         -- push current virtual canvas to screen
+frame()         -- show the current canvas, then wait for the next frame
+setFps(n)       -- set the frame rate frame() keeps (default: 60)
 sleep(ms)       -- pause execution for ms milliseconds
 ```
+
+`frame()` keeps a steady pace: the time your code spends drawing a frame counts
+toward the frame, so a game loop with `frame()` at the end runs at the set rate
+no matter how much work each frame does (as long as it fits in the frame).
+The rate can't exceed the display's refresh rate.
 
 ### Event Handlers
 
@@ -167,11 +173,11 @@ func main() {
 ```
 func main() {
     animate();
+    setFps(60);
     for i in (0..360) {
         setFigureColor(Color::Red);
         circle(500 + round(decimal(i) * 3.14159 / 180.0 * 200.0), 500, 30);
         frame();
-        sleep(16);
     }
 }
 ```

@@ -5,54 +5,6 @@ use quanta_parser::error::{Error, ErrorType};
 use crate::runtime::Runtime;
 //use crate::linear_runtime;
 
-#[derive(Clone, Debug, Copy)]
-enum CommandStatus {
-    OkDraw = 0,
-    OkNoDraw = 1,
-    End = 2,
-    Error = 3,
-}
-
-#[wasm_bindgen]
-#[derive(Clone, Debug)]
-pub struct CommandBlock{
-    status: CommandStatus,
-    commands: Vec<String>,
-    pub sleep_for: i32
-}
-
-#[wasm_bindgen]
-impl CommandBlock {
-    pub fn get_commands(&self) -> Vec<String> {
-        self.commands.clone()
-    }
-
-    pub fn get_status(&self) -> u8 {
-        self.status as u8
-    }
-
-    pub fn set_status(&mut self, status: u8) {
-        self.status = match status {
-            0 => CommandStatus::OkDraw,
-            1 => CommandStatus::OkNoDraw,
-            2 => CommandStatus::End,
-            3 => CommandStatus::Error,
-            _ => CommandStatus::OkNoDraw
-        }
-    }
-}
-
-impl CommandBlock {
-    pub fn new() -> CommandBlock {
-        CommandBlock { commands: vec![], sleep_for: 0, status: CommandStatus::OkNoDraw }
-    }
-
-    pub fn push(&mut self, command: String) -> CommandBlock {
-        self.commands.push(command);
-        self.clone()
-    }
-}
-
 #[derive(Clone)]
 #[wasm_bindgen]
 pub struct RuntimeError {
