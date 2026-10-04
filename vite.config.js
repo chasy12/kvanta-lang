@@ -1,7 +1,8 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/kvanta-lang/",
+  // Relative paths, so the build works from any URL (GitHub Pages, a fork, a custom domain).
+  base: "./",
   test: {
     environment: "jsdom",
     globals: true,

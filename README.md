@@ -206,6 +206,7 @@ wasm-pack build --release --target web
 npm install
 
 # 4. Start dev server
+cd ..
 npm run dev
 ```
 
@@ -214,6 +215,23 @@ Then open [http://localhost:5173](http://localhost:5173).
 ## Project Structure
 
 ```
+### Deployment
+
+The site is built and published by GitHub Actions (`.github/workflows/deploy.yml`).
+Every push to `main` compiles the interpreter, runs the tests, builds the IDE and
+deploys `dist/` to GitHub Pages. Pull requests run the same build and tests without
+deploying. Built files are not committed to the repo.
+
+One-time setup for a new repo or fork: Settings → Pages → Source: **GitHub Actions**.
+The site then appears at `https://<owner>.github.io/<repo>/`.
+
+To check a production build locally:
+
+```bash
+npm run build
+npm run preview
+```
+
 kvanta-lang/
 ├── grammar/                 # Parser grammar
 │   ├── quanta.grammar       # Lezer grammar (frontend syntax highlighting)
@@ -242,6 +260,8 @@ kvanta-lang/
 
 ## Tech Stack
 
+├── .github/workflows/       # Build, test and deploy to GitHub Pages
+│
 - **Pest** — PEG parser for the backend compiler
 - **Lezer** — LR parser for real-time syntax highlighting in the IDE
 - **Rust + wasm-pack** — compiler and interpreter compiled to WebAssembly
