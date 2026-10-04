@@ -14,6 +14,9 @@ circle(500, 500, 200);
 
 Run the above directly — no functions needed for simple scripts.
 
+Errors appear in a bar under the editor; click it to jump to the line. **Share** copies a
+link that opens the current program, so you can send a drawing to someone.
+
 ## Language Features
 
 ### Data Types
@@ -203,18 +206,15 @@ cd quanta-lang
 wasm-pack build --release --target web
 
 # 3. Install frontend dependencies
+cd ..
 npm install
 
 # 4. Start dev server
-cd ..
 npm run dev
 ```
 
 Then open [http://localhost:5173](http://localhost:5173).
 
-## Project Structure
-
-```
 ### Deployment
 
 The site is built and published by GitHub Actions (`.github/workflows/deploy.yml`).
@@ -232,6 +232,9 @@ npm run build
 npm run preview
 ```
 
+## Project Structure
+
+```
 kvanta-lang/
 ├── grammar/                 # Parser grammar
 │   ├── quanta.grammar       # Lezer grammar (frontend syntax highlighting)
@@ -253,15 +256,17 @@ kvanta-lang/
 ├── web/                     # Frontend IDE
 │   ├── main.js              # Editor setup, WASM integration
 │   ├── canvas-runtime.js    # Canvas drawing API
+│   ├── fps-counter.js       # Frame rate readout in animate mode
+│   ├── share-link.js        # Programs encoded in #code= links
 │   └── quanta-support.ts    # CodeMirror language support
+│
+├── .github/workflows/       # Build, test and deploy to GitHub Pages
 │
 └── index.html               # Single-page app
 ```
 
 ## Tech Stack
 
-├── .github/workflows/       # Build, test and deploy to GitHub Pages
-│
 - **Pest** — PEG parser for the backend compiler
 - **Lezer** — LR parser for real-time syntax highlighting in the IDE
 - **Rust + wasm-pack** — compiler and interpreter compiled to WebAssembly

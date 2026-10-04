@@ -10,6 +10,8 @@
  *   - Run the program in the WASM runtime, which hands drawing commands to the
  *     canvas runtime (`canvas-runtime.js`) and paces frames itself.
  *   - Wire up keyboard and mouse events so the running program can react to input.
+ *   - Show compile and runtime errors in a bar under the editor.
+ *   - Share programs as links (`#code=...`) and load them on open.
  *   - Handle file load / save and canvas image export.
  */
 
@@ -50,6 +52,7 @@ import { quantaTheme } from "./custom-theme";
 // Canvas runtime (drawCommands + utilities)
 import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
+import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
 
 // WASM glue (wasm-pack output); adjust crate name/path
 import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
@@ -57,6 +60,8 @@ import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
 
 const runBtn = document.getElementById("runBtn");
 const canvas = document.getElementById("canvas");
+const errorBar = document.getElementById("errorBar");
+const shareBtn = document.getElementById("shareBtn");
 /** Frame rate readout, shown only while an animation is running. */
 const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"));
 
@@ -158,16 +163,36 @@ export function showError(editor, err) {
 }
 
 /**
- * Log an error to the browser console and show a native alert with
- * the source location and message.
+ * Log an error to the browser console and show it in the bar under the editor.
+ * Clicking the bar moves the cursor to the error.
  *
  * @param {{ start_row: number, start_column: number, end_row: number, end_column: number, get_error_message(): string }} err
  */
-export function alertError(err) {
-    console.log("Error:" + err.get_error_message() + " at "
-        + err.start_row + ":" + err.start_column
-        + " - " + err.end_row + ":" + err.end_column);
-    alert("Error at " + err.start_row + ":" + err.start_column + " - " + err.end_row + ":" + err.end_column + "\n" + err.get_error_message());
+export function reportError(err) {
+  console.log("Error:" + err.get_error_message() + " at "
+      + err.start_row + ":" + err.start_column
+      + " - " + err.end_row + ":" + err.end_column);
+  errorBar.textContent = "Line " + err.start_row + ": " + err.get_error_message();
+  errorBar.dataset.row = String(err.start_row);
+  errorBar.dataset.column = String(err.start_column);
+  errorBar.hidden = false;
+}
+
+/**
+ * Show a message that has no source location (e.g. an internal failure).
+ *
+ * @param {string} message
+ */
+export function reportMessage(message) {
+  errorBar.textContent = message;
+  delete errorBar.dataset.row;
+  delete errorBar.dataset.column;
+  errorBar.hidden = false;
+}
+
+/** Hide the error bar. */
+export function hideErrorBar() {
+  errorBar.hidden = true;
 }
 
 /**
@@ -186,8 +211,10 @@ export function showOk(editor) {
 const STORAGE_KEY = "quanta-editor-code";
 
 const savedCode = localStorage.getItem(STORAGE_KEY);
-/** Default program shown when no saved code exists in localStorage. */
-const startCode = savedCode || `func mouse(int z, int y) {
+/** Program from a shared link (`#code=...`), if the page was opened with one. */
+const sharedCode = await decodeCode(location.hash);
+/** Shared program first, then the saved one, then this default. */
+const startCode = sharedCode ?? (savedCode || `func mouse(int z, int y) {
     setFigureColor(Color::Red);
     rectangle(z, y, z+100, y+100);
     x = x + 10;
@@ -218,7 +245,7 @@ func main() {
    rectangle(0, 0, 100, 100);
 }
 
-`;
+`);
 
 // ---------------------------------------------------------------------------
 // Background compile (on typing)
@@ -257,6 +284,12 @@ let typingTimer = null;
 const onTyping = EditorView.updateListener.of(update => {
   if (update.docChanged) {
     update.view.dispatch(setDiagnostics(update.state, []));
+    hideErrorBar();
+    // Once the shared program is edited it is the user's own: drop the link
+    // from the address bar so a reload shows the saved edits.
+    if (isSharedHash(location.hash)) {
+      window.history.replaceState(null, "", location.pathname + location.search);
+    }
     clearTimeout(typingTimer);
 
     // schedule a new one
@@ -477,6 +510,7 @@ function doRun() {
       fpsCounter.reset();
       isRunning = true;
       runBtn.disabled = true;
+      hideErrorBar();
       setup();
       await initWasm();
       const src = editor.state.doc.toString();
@@ -485,7 +519,7 @@ function doRun() {
       if (compilation_result.error_code != 0) {
         const err = compilation_result.get_error();
         showError(editor, err);
-        alertError(err);
+        reportError(err);
         runBtn.disabled = false;
         return;
       } else {
@@ -505,11 +539,11 @@ function doRun() {
       const err = activeRuntime.get_runtime_error();
       if (err.error_code != 0) {
         showError(editor, err);
-        alertError(err);
+        reportError(err);
       }
     } catch (e) {
       console.error(e);
-      alert("Error: " + (e?.message ?? String(e)));
+      reportMessage("Error: " + (e?.message ?? String(e)));
     } finally {
       if (runId === currentRun) {
         fpsCounter.reset();
@@ -567,6 +601,41 @@ window.addEventListener('keydown', (e) => {
   } catch (err) {
     console.warn('Keyboard runtime error:', err);
   }
+});
+
+/** Move the cursor to the error shown in the bar. */
+errorBar.addEventListener('click', () => {
+  if (!errorBar.dataset.row) return;
+  const doc = editor.state.doc;
+  const line = doc.line(Math.min(doc.lines, Math.max(1, Number(errorBar.dataset.row))));
+  const pos = Math.min(line.to, line.from + Number(errorBar.dataset.column));
+  editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  editor.focus();
+});
+
+// ---------------------------------------------------------------------------
+// Share links
+// ---------------------------------------------------------------------------
+
+/** Put the program in the address bar as `#code=...` and copy that link. */
+shareBtn.addEventListener('click', async () => {
+  const url = location.origin + location.pathname + location.search
+    + await encodeCode(editor.state.doc.toString());
+  window.history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    shareBtn.textContent = 'Link copied';
+    setTimeout(() => { shareBtn.textContent = 'Share'; }, 2000);
+  } catch {
+    prompt("Copy this link:", url);
+  }
+});
+
+/** Load a shared program when a link is pasted into an already open tab. */
+window.addEventListener('hashchange', async () => {
+  const code = await decodeCode(location.hash);
+  if (code === null) return;
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: code } });
 });
 
 // ---------------------------------------------------------------------------
