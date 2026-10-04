@@ -11,7 +11,7 @@ use crate::utils::canvas::Canvas;
 const YIELD_BUDGET_MS: f64 = 8.0;
 
 /// Frame rate used until the program calls `setFps`.
-const DEFAULT_FPS: i32 = 60;
+const DEFAULT_FPS: i32 = 30;
 
 /// A display refresh that lands this close before the target time still counts,
 /// so a 60 fps target on a 60 Hz display doesn't skip frames because of jitter.
@@ -52,6 +52,7 @@ extern "C" {
 
 #[derive(Debug)]
 struct Clock {
+    /// 0 means no cap: one frame per display refresh.
     frame_interval_ms: f64,
     last_frame_at: f64,
     last_yield_at: f64,
@@ -94,8 +95,10 @@ impl Scheduler {
         self.cancelled.load(Ordering::SeqCst)
     }
 
+    /// Sets the frame rate `frame()` keeps. 0 removes the cap, so frames
+    /// follow the display's refresh rate.
     pub fn set_fps(&self, fps: i32) {
-        self.clock.lock().unwrap().frame_interval_ms = 1000.0 / fps as f64;
+        self.clock.lock().unwrap().frame_interval_ms = if fps == 0 { 0.0 } else { 1000.0 / fps as f64 };
     }
 
     /// Lets the browser handle events and paint if the program has been
@@ -122,12 +125,17 @@ impl Scheduler {
     /// Waits for the first display refresh at least one frame interval after
     /// the previous frame. If that time has already passed (a slow frame, or
     /// the program slept), it only yields once so the frame gets painted.
+    /// Without a cap, it always waits for the next display refresh.
     pub async fn wait_for_next_frame(&self) -> Result<(), Error> {
         let (target, interval) = {
             let clock = self.clock.lock().unwrap();
             (clock.last_frame_at + clock.frame_interval_ms, clock.frame_interval_ms)
         };
-        let now = if now_ms() >= target - FRAME_TOLERANCE_MS {
+        let now = if interval == 0.0 {
+            let _ = JsFuture::from(next_animation_frame()).await;
+            self.check_cancelled()?;
+            now_ms()
+        } else if now_ms() >= target - FRAME_TOLERANCE_MS {
             let _ = JsFuture::from(next_macrotask()).await;
             self.check_cancelled()?;
             now_ms()

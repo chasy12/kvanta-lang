@@ -54,6 +54,7 @@
       font-size: 12px; color: var(--muted);
       background: rgba(2,6,23,0.35); padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(226,232,240,0.1);
     }
+    .pane__header--start { right: auto; left: 12px; font-variant-numeric: tabular-nums; }
 
     /* Output box */
     #output {
@@ -200,6 +201,7 @@
       <div class="resizer" id="resizer" aria-hidden="true"></div>
       <div class="pane">
         <div class="pane__header">Result</div>
+        <div class="pane__header pane__header--start" id="fpsCounter" hidden></div>
         <div class="resultWrap">
           <div class="canvasContainer">
             <canvas id="canvas" class="canvas" width="1000" height="1000" tabindex="0"></canvas>
