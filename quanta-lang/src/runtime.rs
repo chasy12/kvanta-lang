@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use quanta_parser::{ast::keys::key_to_number};
 
-use crate::{execution::{Execution, Scope}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler}};
+use crate::{execution::{pack_color, Execution, Scope}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler}};
 
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 
@@ -96,18 +96,18 @@ impl Runtime {
         //let exec = Execution::from_program(prog.clone(), canv);
         let global_vars = Arc::new(Mutex::new(HashMap::new()));
         let global_var_defs = Arc::new(Mutex::new(prog.global_vars));
-        let fig_col = Arc::new(Mutex::new(String::from("#ffffff")));
-        let lin_col = Arc::new(Mutex::new(String::from("#000000")));
+        let fig_col = Arc::new(Mutex::new(pack_color(255, 255, 255, 255)));
+        let lin_col = Arc::new(Mutex::new(pack_color(0, 0, 0, 255)));
         let lin_wid = Arc::new(Mutex::new(1));
         let scheduler = Scheduler::new();
 
         let exec = Execution {
-            lines : prog.lines.clone(),
+            lines : Arc::new(prog.lines.clone()),
             scope : Arc::new(Mutex::new(Scope { variables: HashMap::new(), outer_scope: None })),
             global_vars: Arc::clone(&global_vars),
             canvas: canvas.clone(),
             scheduler: scheduler.clone(),
-            functions: prog.functions.clone(),
+            functions: Arc::new(prog.functions.clone()),
             figure_color: Arc::clone(&fig_col),
             line_color: Arc::clone(&lin_col),
             line_width: Arc::clone(&lin_wid),
@@ -136,7 +136,7 @@ impl Runtime {
         let mut runtime_error = RuntimeError::zero();
 
         for (name, (_, expr)) in defs.iter() {
-            let val = exec.calculate_expression(expr.clone()).await;
+            let val = exec.calculate_expression(expr).await;
             match val {
                 Ok(value) => {
                     exec.global_vars.lock().unwrap().insert(name.clone(), value)

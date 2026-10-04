@@ -43,6 +43,11 @@ const saveBtn = document.createElement('button');
 saveBtn.id = 'saveBtn';
 document.body.appendChild(saveBtn);
 
+const fpsCounter = document.createElement('div');
+fpsCounter.id = 'fpsCounter';
+fpsCounter.hidden = true;
+document.body.appendChild(fpsCounter);
+
 const fileInput = document.createElement('input');
 fileInput.type = 'file';
 fileInput.id = 'fileInput';

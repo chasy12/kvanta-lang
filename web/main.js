@@ -47,8 +47,9 @@ import { quanta, quantaSyntax, quantaLanguageSupport } from "./quanta-support.ts
 
 import { quantaTheme } from "./custom-theme";
 
-// Canvas runtime (drawScript + utilities)
-import { drawScript, setup, checkIsCancelled, cancelNow, setIsSafari } from "./canvas-runtime.js";
+// Canvas runtime (drawCommands + utilities)
+import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari } from "./canvas-runtime.js";
+import { createFpsCounter } from "./fps-counter.js";
 
 // WASM glue (wasm-pack output); adjust crate name/path
 import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
@@ -56,6 +57,8 @@ import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
 
 const runBtn = document.getElementById("runBtn");
 const canvas = document.getElementById("canvas");
+/** Frame rate readout, shown only while an animation is running. */
+const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"));
 
 /** The live WASM runtime instance; `undefined` when no program is executing. */
 let runtime = undefined;
@@ -420,6 +423,7 @@ function doStop() {
   runtime?.stop();
   runtime = undefined;
   cancelNow();
+  fpsCounter.reset();
   setIdleUI();
 }
 
@@ -458,7 +462,7 @@ async function executeMouse(x, y) {
  * Flow:
  *   1. Stop any previous program, reset cancellation state and canvas.
  *   2. Compile with a fresh WASM `Compiler`; show error and abort on failure.
- *   3. Give the WASM runtime `drawScript` as its renderer and await `execute()`.
+ *   3. Give the WASM runtime `drawCommands` as its renderer and await `execute()`.
  *      The runtime calls the renderer whenever it has drawing to show and
  *      handles `frame()`, `sleep()` and `setFps()` timing itself.
  *   4. Show the runtime error, if any, and restore idle UI state when done.
@@ -470,6 +474,7 @@ function doRun() {
       runtime?.stop();
       runtime = undefined;
       cancelNow(false);
+      fpsCounter.reset();
       isRunning = true;
       runBtn.disabled = true;
       setup();
@@ -489,7 +494,12 @@ function doRun() {
       setRunningUI();
       const activeRuntime = compilation_result.get_runtime();
       runtime = activeRuntime;
-      activeRuntime.set_renderer((commands, present) => drawScript(commands, present));
+      activeRuntime.set_renderer((ops, strings, present) => {
+        drawCommands(ops, strings, present);
+        if (present && isAnimationMode()) {
+          fpsCounter.tick(performance.now());
+        }
+      });
       await activeRuntime.execute();
       if (runId !== currentRun || checkIsCancelled()) { return; }
       const err = activeRuntime.get_runtime_error();
@@ -502,6 +512,7 @@ function doRun() {
       alert("Error: " + (e?.message ?? String(e)));
     } finally {
       if (runId === currentRun) {
+        fpsCounter.reset();
         setIdleUI();
         runBtn.disabled = false;
       }

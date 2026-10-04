@@ -116,14 +116,15 @@ Global blocks are accessible from all functions.
 ```
 animate()       -- enter animation mode (nothing renders until frame() is called)
 frame()         -- show the current canvas, then wait for the next frame
-setFps(n)       -- set the frame rate frame() keeps (default: 60)
+setFps(n)       -- set the frame rate frame() keeps (default: 30)
+setFps(0)       -- no cap: one frame per screen refresh (e.g. 60, 120 or 144 fps)
 sleep(ms)       -- pause execution for ms milliseconds
 ```
 
 `frame()` keeps a steady pace: the time your code spends drawing a frame counts
 toward the frame, so a game loop with `frame()` at the end runs at the set rate
 no matter how much work each frame does (as long as it fits in the frame).
-The rate can't exceed the display's refresh rate.
+While an animation runs, the Result pane shows the frame rate it actually reaches.
 
 ### Event Handlers
 

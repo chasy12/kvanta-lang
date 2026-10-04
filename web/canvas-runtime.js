@@ -1,18 +1,19 @@
 /**
  * canvas-runtime.js
  *
- * Executes drawing scripts on a double-buffered HTML5 canvas.
+ * Executes drawing operations from the WASM runtime on a double-buffered
+ * HTML5 canvas.
  *
  * Architecture:
  *   - All drawing happens on an off-screen `bufferCanvas` first.
  *   - The result is composited onto the visible `drawCanvas` only when a
  *     frame is ready (end of a non-animation script, or an explicit frame
  *     flush during animation).
- *   - Coordinates passed to drawing commands are in logical canvas units and
- *     are converted to physical pixels by `toPx` (from canvas-utils).
+ *   - Coordinates are in logical canvas units (0–1000); a DPR scale transform
+ *     maps them to physical pixels.
  */
 
-import { CANVAS_W, CANVAS_H, deg2rad, toPx, tokenize, randomColorString } from './canvas-utils.js';
+import { CANVAS_W, CANVAS_H, deg2rad } from './canvas-utils.js';
 
 const logEl      = document.getElementById('logs');
 const drawCanvas = document.getElementById('canvas');
@@ -30,10 +31,7 @@ let isCancelled = false;
 // Cap DPR at 3 to avoid excessive memory usage on very high-density displays.
 const DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
 
-/** Palette of lazily-generated random colors, indexed by `RandomColor<N>` tokens. */
-let randomColors = [];
-
-/** Safari requires a special repaint workaround after compositing (see `drawScript`). */
+/** Safari requires a special repaint workaround after compositing (see `drawCommands`). */
 let isSafari = false;
 
 // Size both canvases to physical pixels and apply a DPR scale transform so
@@ -60,11 +58,9 @@ export function log(text) {
 }
 
 /**
- * Reset runtime state before executing a new script.
- * Clears the random-color palette and wipes the canvas.
+ * Reset runtime state before executing a new program and wipe the canvas.
  */
 export function setup() {
-  randomColors = [];
   clearCanvas();
 }
 
@@ -118,245 +114,146 @@ function clearCanvas(color = '#0a0f1f') {
   ctx.restore();
 }
 
-/**
- * Apply stroke/fill/lineWidth options from a parsed options object to `ctx`.
- *
- * @param {{ width?: number, stroke?: string, fill?: string }} opts
- */
-function applyStyle(opts) {
-  ctx.lineWidth = opts.width ?? 1;
-  if (opts.stroke) ctx.strokeStyle = opts.stroke;
-  if (opts.fill)   ctx.fillStyle   = opts.fill;
-}
+/** CSS color strings for packed 0xRRGGBBAA colors, so each color is formatted once. */
+const colorStrings = new Map();
 
 /**
- * Parse `key=value` pairs from a token array into a drawing-options object.
+ * Convert a packed 0xRRGGBBAA color to a CSS `#rrggbbaa` string.
  *
- * Supported keys: `width`, `stroke`, `fill`, `ccw`.
- *
- * `RandomColor` values are resolved against the shared `randomColors` palette:
- * - `RandomColor`  → appends a new random color and uses it.
- * - `RandomColor0`, `RandomColor1`, … → uses (or lazily creates) the color at
- *   that index, so the same index always returns the same color within a run.
- *
- * @param {string[]} tokens   - Full token array for the current script line.
- * @param {number}   startIdx - Index of the first key=value token.
- * @returns {{ width?: number, stroke?: string, fill?: string, ccw?: boolean }}
+ * @param {number} packed
+ * @returns {string}
  */
-function parseOptions(tokens, startIdx) {
-  const o = {};
-  for (let i = startIdx; i < tokens.length; i++) {
-    const t  = tokens[i];
-    const eq = t.indexOf('=');
-    if (eq > 0) {
-      let k = t.slice(0, eq);
-      let v = t.slice(eq + 1);
-
-      if (v.startsWith('RandomColor')) {
-        let idx = parseInt(v.slice(11));
-        if (isNaN(idx)) {
-          randomColors.push(randomColorString());
-          idx = randomColors.length - 1;
-        }
-        while (idx >= randomColors.length) {
-          randomColors.push(randomColorString());
-        }
-        v = randomColors[idx];
-      }
-
-      if      (k === 'width')  o.width  = Number(v);
-      else if (k === 'stroke') o.stroke = v;
-      else if (k === 'fill')   o.fill   = v;
-      else if (k === 'ccw')    o.ccw    = /^(1|true|yes)$/i.test(v);
-    }
+export function colorToCss(packed) {
+  let css = colorStrings.get(packed);
+  if (css === undefined) {
+    css = '#' + (packed >>> 0).toString(16).padStart(8, '0');
+    colorStrings.set(packed, css);
   }
-  return o;
-}
-
-/**
- * Draw a full circle.
- *
- * @param {number|string} cx - Centre X in logical units.
- * @param {number|string} cy - Centre Y in logical units.
- * @param {number|string} r  - Radius in logical units.
- * @param {object}        o  - Style options from `parseOptions`.
- */
-function drawCircle(cx, cy, r, o) {
-  ctx.beginPath();
-  ctx.arc(toPx(cx, 'x'), toPx(cy, 'y'), toPx(r, 'x'), 0, Math.PI * 2);
-  if (o.fill)            ctx.fill();
-  if (o.stroke || !o.fill) ctx.stroke();
-}
-
-/**
- * Draw an axis-aligned rectangle defined by two corner points.
- *
- * @param {number|string} x - Left edge in logical units.
- * @param {number|string} y - Top edge in logical units.
- * @param {number|string} w - Right edge in logical units.
- * @param {number|string} h - Bottom edge in logical units.
- * @param {object}        o - Style options from `parseOptions`.
- */
-function drawRect(x, y, w, h, o) {
-  const X = toPx(x, 'x'), Y = toPx(y, 'y'), W = toPx(w, 'x'), H = toPx(h, 'y');
-  if (o.fill)            ctx.fillRect  (X, Y, W - X, H - Y);
-  if (o.stroke || !o.fill) ctx.strokeRect(X, Y, W - X, H - Y);
-}
-
-/**
- * Draw a straight line segment.
- *
- * @param {number|string} x1 - Start X in logical units.
- * @param {number|string} y1 - Start Y in logical units.
- * @param {number|string} x2 - End X in logical units.
- * @param {number|string} y2 - End Y in logical units.
- * @param {object}        o  - Style options from `parseOptions`.
- */
-function drawLine(x1, y1, x2, y2, o) {
-  ctx.beginPath();
-  ctx.moveTo(toPx(x1, 'x'), toPx(y1, 'y'));
-  ctx.lineTo(toPx(x2, 'x'), toPx(y2, 'y'));
-  ctx.stroke();
-}
-
-/**
- * Draw a closed polygon from a flat array of alternating X/Y coordinates.
- * Requires at least two points (four numbers).
- *
- * @param {number[]} nums - Flat coordinate list: [x0, y0, x1, y1, …].
- * @param {object}   o    - Style options from `parseOptions`.
- */
-function drawPolygon(nums, o) {
-  if (nums.length < 4) return;
-  ctx.beginPath();
-  ctx.moveTo(toPx(nums[0], 'x'), toPx(nums[1], 'y'));
-  for (let i = 2; i < nums.length; i += 2) {
-    ctx.lineTo(toPx(nums[i], 'x'), toPx(nums[i + 1], 'y'));
-  }
-  ctx.closePath();
-  if (o.fill)            ctx.fill();
-  if (o.stroke || !o.fill) ctx.stroke();
-}
-
-/**
- * Draw a circular arc.
- *
- * @param {number|string} cx  - Centre X in logical units.
- * @param {number|string} cy  - Centre Y in logical units.
- * @param {number|string} r   - Radius in logical units.
- * @param {number}        a0  - Start angle in degrees.
- * @param {number}        a1  - End angle in degrees.
- * @param {boolean}       ccw - Draw counter-clockwise when true.
- * @param {object}        o   - Style options from `parseOptions`.
- */
-function drawArc(cx, cy, r, a0, a1, ccw, o) {
-  ctx.beginPath();
-  ctx.arc(toPx(cx, 'x'), toPx(cy, 'y'), toPx(r, 'x'), deg2rad(a0), deg2rad(a1), !!ccw);
-  if (o.fill)            ctx.fill();
-  if (o.stroke || !o.fill) ctx.stroke();
+  return css;
 }
 
 // ---------------------------------------------------------------------------
-// Script executor
+// Command executor
 // ---------------------------------------------------------------------------
 
 /**
- * Interpret and render an array of drawing-script lines onto the buffer canvas,
- * then composite to the visible canvas when appropriate.
- *
- * Supported commands (case-insensitive):
- *   - `circle <cx> <cy> <r> [opts]`
- *   - `rectangle <x> <y> <w> <h> [opts]`
- *   - `line <x1> <y1> <x2> <y2> [opts]`
- *   - `polygon <x0> <y0> … [opts]`
- *   - `arc <cx> <cy> <r> <a0> <a1> [opts]`
- *   - `bg|background [color]`
- *   - `animate`
- *   - `clear`
- *   - `error <msg>`
- *   - `print <msg>`
- *
- * The `animate` command sets a flag that defers compositing until
- * `should_draw_frame` is explicitly true, enabling frame-by-frame animation.
- *
- * @param {string[]} script            - Lines of the drawing script to execute.
- * @param {boolean}  [should_draw_frame=false] - Force a composite to the visible
- *                                               canvas even when in animation mode.
+ * Opcodes of the drawing buffer produced by the WASM runtime.
+ * Keep in sync with `op` in quanta-lang/src/utils/canvas.rs.
  */
-export function drawScript(script, should_draw_frame = false) {
+export const OP = Object.freeze({
+  CLEAR: 1,      // –
+  ANIMATE: 2,    // –
+  CIRCLE: 3,     // x, y, radius
+  RECTANGLE: 4,  // x1, y1, x2, y2
+  LINE: 5,       // x1, y1, x2, y2
+  ARC: 6,        // x, y, radius, start°, end°
+  POLYGON: 7,    // n, then n coordinates x1, y1, x2, y2, …
+  STYLE: 8,      // fill 0xRRGGBBAA, stroke 0xRRGGBBAA, line width
+  PRINT: 9,      // index into `strings`
+});
+
+/**
+ * Whether the running program has entered animation mode (`animate()`).
+ *
+ * @returns {boolean}
+ */
+export function isAnimationMode() {
+  return isAnimation;
+}
+
+/**
+ * Execute a buffer of drawing operations on the buffer canvas, then
+ * composite to the visible canvas when appropriate.
+ *
+ * Shapes are filled with the current fill color and outlined with the
+ * current stroke color; lines are only stroked. Styles persist until the
+ * next `STYLE` operation within the same call.
+ *
+ * In animation mode (after an `ANIMATE` operation) the result is only shown
+ * when `present` is true, i.e. once per `frame()`.
+ *
+ * @param {ArrayLike<number>} ops     - Opcodes followed by their arguments (see `OP`).
+ * @param {string[]}          strings - Messages referenced by `PRINT` operations.
+ * @param {boolean} [present=false]   - Show the result even in animation mode.
+ */
+export function drawCommands(ops, strings, present = false) {
+  if (isCancelled) { return; }
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
-  for (var i = 0; i < script.length; i += 1) {
-    let raw = script[i];
-    if (isCancelled) { return; }
-
-    const line = raw.trim();
-    if (!line || line.startsWith('//')) continue;
-
-    const tok = tokenize(line);
-    if (!tok.length) continue;
-
-    const cmd = tok[0].toLowerCase();
-    try {
-      switch (cmd) {
-        case 'circle': {
-          const [_, cx, cy, r] = tok;
-          const o = parseOptions(tok, 4);
-          applyStyle(o); drawCircle(cx, cy, r, o);
-          break;
-        }
-        case 'rectangle': {
-          const [_, x, y, w, h] = tok;
-          const o = parseOptions(tok, 5);
-          applyStyle(o); drawRect(x, y, w, h, o);
-          break;
-        }
-        case 'line': {
-          const [_, x1, y1, x2, y2] = tok;
-          const o = parseOptions(tok, 5);
-          applyStyle(o); drawLine(x1, y1, x2, y2, o);
-          break;
-        }
-        case 'polygon': {
-          const nums = []; let i = 1;
-          for (; i < tok.length; i++) {
-            if (tok[i].includes('=')) break;
-            nums.push(Number(tok[i]));
-          }
-          const o = parseOptions(tok, i);
-          applyStyle(o); drawPolygon(nums, o);
-          break;
-        }
-        case 'arc': {
-          const [_, cx, cy, r, a0, a1] = tok;
-          const o = parseOptions(tok, 6);
-          applyStyle(o); drawArc(cx, cy, r, Number(a0), Number(a1), !!o.ccw, o);
-          break;
-        }
-        case 'bg':
-        case 'background': {
-          const color = tok[1] || '#0a0f1f';
-          clearCanvas(color);
-          break;
-        }
-        case 'animate': { isAnimation = true; break; }
-        case 'clear':   { clearCanvas(); break; }
-        case 'error':   { alert('Error: ' + raw); break; }
-        case 'print': {
-          const msg = raw.slice(5).trim();
-          console.log('Print:' + msg);
-          break;
-        }
-        default: /* ignore unknown commands */ break;
+  let i = 0;
+  while (i < ops.length) {
+    switch (ops[i]) {
+      case OP.CLEAR:
+        clearCanvas();
+        i += 1;
+        break;
+      case OP.ANIMATE:
+        isAnimation = true;
+        i += 1;
+        break;
+      case OP.STYLE:
+        ctx.fillStyle = colorToCss(ops[i + 1]);
+        ctx.strokeStyle = colorToCss(ops[i + 2]);
+        ctx.lineWidth = ops[i + 3];
+        i += 4;
+        break;
+      case OP.CIRCLE:
+        ctx.beginPath();
+        ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        i += 4;
+        break;
+      case OP.RECTANGLE: {
+        const x = ops[i + 1], y = ops[i + 2], w = ops[i + 3] - x, h = ops[i + 4] - y;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+        i += 5;
+        break;
       }
-    } catch (e) { console.warn('Error:', line, e); }
+      case OP.LINE:
+        ctx.beginPath();
+        ctx.moveTo(ops[i + 1], ops[i + 2]);
+        ctx.lineTo(ops[i + 3], ops[i + 4]);
+        ctx.stroke();
+        i += 5;
+        break;
+      case OP.ARC:
+        ctx.beginPath();
+        ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], deg2rad(ops[i + 4]), deg2rad(ops[i + 5]));
+        ctx.fill();
+        ctx.stroke();
+        i += 6;
+        break;
+      case OP.POLYGON: {
+        const n = ops[i + 1];
+        const first = i + 2;
+        ctx.beginPath();
+        ctx.moveTo(ops[first], ops[first + 1]);
+        for (let p = first + 2; p < first + n; p += 2) {
+          ctx.lineTo(ops[p], ops[p + 1]);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        i += 2 + n;
+        break;
+      }
+      case OP.PRINT:
+        console.log('Print:' + strings[ops[i + 1]]);
+        i += 2;
+        break;
+      default:
+        console.warn('Unknown drawing operation', ops[i], 'at', i);
+        i = ops.length;
+    }
   }
 
   ctx.restore();
 
   // Composite the buffer onto the visible canvas.
   // In animation mode, only do this when explicitly requested (i.e. per-frame).
-  if (!isAnimation || should_draw_frame) {
+  if (!isAnimation || present) {
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     drawCtx.drawImage(bufferCanvas, 0, 0);
     if (isSafari) {

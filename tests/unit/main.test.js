@@ -43,7 +43,8 @@ vi.mock('../../quanta-lang/pkg/quanta_lang.js', () => {
 });
 
 vi.mock('../../web/canvas-runtime.js', () => ({
-  drawScript: vi.fn(),
+  drawCommands: vi.fn(),
+  isAnimationMode: vi.fn(() => false),
   setup: vi.fn(),
   checkIsCancelled: vi.fn(() => false),
   cancelNow: vi.fn(),
@@ -64,7 +65,7 @@ import {
   showOk,
 } from '../../web/main.js';
 
-import { setup, cancelNow, drawScript } from '../../web/canvas-runtime.js';
+import { setup, cancelNow, drawCommands, isAnimationMode } from '../../web/canvas-runtime.js';
 
 // ============================================================
 // fontSizeTheme
@@ -509,13 +510,36 @@ describe('runBtn – click handler', () => {
     );
   });
 
-  it('gives the runtime a renderer that forwards to drawScript', async () => {
+  it('gives the runtime a renderer that forwards to drawCommands', async () => {
     document.getElementById('runBtn').click();
     await vi.waitFor(() => expect(mockRuntime.execute).toHaveBeenCalled(), { timeout: 2000 });
 
     const renderer = mockRuntime.set_renderer.mock.calls[0][0];
-    renderer(['circle 1 2 3'], true);
-    expect(drawScript).toHaveBeenCalledWith(['circle 1 2 3'], true);
+    const ops = new Float64Array([3, 1, 2, 3]);
+    renderer(ops, ['msg'], true);
+    expect(drawCommands).toHaveBeenCalledWith(ops, ['msg'], true);
+  });
+
+  it('shows the fps counter only for presented frames in animation mode', async () => {
+    const fps = document.getElementById('fpsCounter');
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {})); // keep running
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(mockRuntime.set_renderer).toHaveBeenCalled(), { timeout: 2000 });
+    const renderer = mockRuntime.set_renderer.mock.calls.at(-1)[0];
+
+    renderer(new Float64Array(), [], true);
+    expect(fps.hidden).toBe(true); // not animating
+
+    isAnimationMode.mockReturnValue(true);
+    renderer(new Float64Array(), [], false);
+    expect(fps.hidden).toBe(true); // not a presented frame
+
+    renderer(new Float64Array(), [], true);
+    expect(fps.hidden).toBe(false);
+
+    document.getElementById('runBtn').click(); // Stop
+    expect(fps.hidden).toBe(true);
+    isAnimationMode.mockReturnValue(false);
   });
 
   it('shows the runtime error once the program finishes with one', async () => {
