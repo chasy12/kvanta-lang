@@ -7,8 +7,8 @@
  * • canvas-runtime is mocked so we can spy on calls like `setup` and `cancelNow`.
  * • All required DOM elements (runBtn, editor, resizer, …) are pre-created
  *   in tests/setup.js, which runs before the module is imported.
- * • Exported pure utilities (fontSizeTheme, downloadFile, alertError,
- *   showError, showOk) are imported and tested directly.
+ * • Exported utilities (fontSizeTheme, downloadFile, reportError,
+ *   reportMessage, hideErrorBar, showError, showOk) are imported and tested directly.
  * • DOM event handlers are exercised by dispatching events on the real elements.
  */
 
@@ -56,11 +56,14 @@ vi.mock('../../web/canvas-runtime.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 
 import {
   fontSizeTheme,
   downloadFile,
-  alertError,
+  reportError,
+  reportMessage,
+  hideErrorBar,
   showError,
   showOk,
 } from '../../web/main.js';
@@ -152,11 +155,12 @@ describe('downloadFile', () => {
 });
 
 // ============================================================
-// alertError
+// reportError / reportMessage / hideErrorBar
 // ============================================================
 
-describe('alertError', () => {
-  let logSpy, alertSpy;
+describe('reportError', () => {
+  let logSpy;
+  const errorBar = () => document.getElementById('errorBar');
 
   const makeErr = (msg = 'bad token', sr = 2, sc = 4, er = 2, ec = 9) => ({
     start_row: sr,
@@ -168,51 +172,44 @@ describe('alertError', () => {
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    hideErrorBar();
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    hideErrorBar();
+  });
+
+  it('logs the message with row and column to the console', () => {
+    reportError(makeErr('x', 3, 7, 3, 12));
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('x at 3:7'));
+  });
+
+  it('shows the line and message in the error bar', () => {
+    reportError(makeErr('syntax error', 5, 12, 5, 15));
+    expect(errorBar().hidden).toBe(false);
+    expect(errorBar().textContent).toBe('Line 5: syntax error');
+  });
+
+  it('does not open a native alert', () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    reportError(makeErr());
+    expect(alertSpy).not.toHaveBeenCalled();
     alertSpy.mockRestore();
   });
 
-  it('calls console.log once', () => {
-    alertError(makeErr());
-    expect(logSpy).toHaveBeenCalledOnce();
+  it('reportMessage shows text without a location', () => {
+    reportError(makeErr());
+    reportMessage('Error: boom');
+    expect(errorBar().textContent).toBe('Error: boom');
+    expect(errorBar().dataset.row).toBeUndefined();
   });
 
-  it('includes the error message in the console output', () => {
-    alertError(makeErr('undefined variable'));
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('undefined variable'),
-    );
-  });
-
-  it('includes row and column in the console output', () => {
-    alertError(makeErr('x', 3, 7, 3, 12));
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('3:7'));
-  });
-
-  it('calls window.alert once', () => {
-    alertError(makeErr());
-    expect(alertSpy).toHaveBeenCalledOnce();
-  });
-
-  it('includes the error message in the alert', () => {
-    alertError(makeErr('syntax error'));
-    expect(alertSpy).toHaveBeenCalledWith(
-      expect.stringContaining('syntax error'),
-    );
-  });
-
-  it('includes the start row:column in the alert', () => {
-    alertError(makeErr('e', 5, 12, 5, 15));
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('5:12'));
-  });
-
-  it('includes the end row:column in the alert', () => {
-    alertError(makeErr('e', 1, 0, 1, 4));
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('1:4'));
+  it('hideErrorBar hides the bar', () => {
+    reportMessage('Error: boom');
+    hideErrorBar();
+    expect(errorBar().hidden).toBe(true);
   });
 });
 
@@ -542,8 +539,9 @@ describe('runBtn – click handler', () => {
     isAnimationMode.mockReturnValue(false);
   });
 
-  it('shows the runtime error once the program finishes with one', async () => {
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  it('shows the runtime error in the error bar once the program finishes with one', async () => {
+    const errorBar = document.getElementById('errorBar');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     mockRuntime.get_runtime_error.mockReturnValueOnce({
       error_code: 4,
       start_row: 1, start_column: 0, end_row: 1, end_column: 1,
@@ -552,10 +550,34 @@ describe('runBtn – click handler', () => {
 
     document.getElementById('runBtn').click();
     await vi.waitFor(
-      () => expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('Division by 0')),
+      () => expect(errorBar.textContent).toBe('Line 1: Division by 0'),
       { timeout: 2000 },
     );
-    alertSpy.mockRestore();
+    expect(errorBar.hidden).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('hides the previous error when the program is run again', async () => {
+    const errorBar = document.getElementById('errorBar');
+    reportMessage('Error: old');
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(setup).toHaveBeenCalled(), { timeout: 2000 });
+    expect(errorBar.hidden).toBe(true);
+  });
+
+  it('moves the cursor to the error when the error bar is clicked', () => {
+    const errorBar = document.getElementById('errorBar');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    reportError({
+      start_row: 2, start_column: 3, end_row: 2, end_column: 4,
+      get_error_message: () => 'oops',
+    });
+    errorBar.click();
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    const head = view.state.selection.main.head;
+    expect(view.state.doc.lineAt(head).number).toBe(2);
+    expect(head - view.state.doc.line(2).from).toBe(3);
+    vi.restoreAllMocks();
   });
 
   it('stops the runtime and restores the Run button when Stop is clicked', async () => {

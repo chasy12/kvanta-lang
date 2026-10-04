@@ -152,6 +152,15 @@
   border: 1px solid rgba(255, 255, 255);
 }
 
+.errorBar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 8px 12px; cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px;
+  white-space: pre-wrap; word-break: break-word;
+  color: #fecaca; background: #450a0a; border-top: 1px solid #f87171;
+}
+.errorBar[hidden] { display: none; }
+
 .cm-error {
   text-decoration: underline red wavy;
 }
@@ -191,12 +200,14 @@
       <button id="downloadBtn">Download</button>
       <button id="loadBtn">Load from file</button>
       <button id="saveBtn">Save Image</button>
+      <button id="shareBtn" title="Copy a link that opens this program">Share</button>
       <button id="runBtn">Run your program!</button>
     </div>
     <div class="panes">
       <div class="pane">
         <div class="pane__header">Source</div>
         <div id="editor"></div>
+        <div id="errorBar" class="errorBar" role="alert" title="Click to go to the error" hidden></div>
       </div>
       <div class="resizer" id="resizer" aria-hidden="true"></div>
       <div class="pane">

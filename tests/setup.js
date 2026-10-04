@@ -43,6 +43,15 @@ const saveBtn = document.createElement('button');
 saveBtn.id = 'saveBtn';
 document.body.appendChild(saveBtn);
 
+const shareBtn = document.createElement('button');
+shareBtn.id = 'shareBtn';
+document.body.appendChild(shareBtn);
+
+const errorBar = document.createElement('div');
+errorBar.id = 'errorBar';
+errorBar.hidden = true;
+document.body.appendChild(errorBar);
+
 const fpsCounter = document.createElement('div');
 fpsCounter.id = 'fpsCounter';
 fpsCounter.hidden = true;
@@ -61,6 +70,15 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     unobserve() {}
     disconnect() {}
   };
+}
+
+// jsdom has no layout, so Range lacks the measuring methods CodeMirror calls
+// when it scrolls the cursor into view.
+if (!Range.prototype.getClientRects) {
+  Range.prototype.getClientRects = () => [];
+  Range.prototype.getBoundingClientRect = () => ({
+    width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0,
+  });
 }
 
 // Mock canvas 2D context (jsdom does not implement CanvasRenderingContext2D).
