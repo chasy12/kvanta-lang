@@ -142,6 +142,8 @@ export const rawCompletionItems = [
   {label: "bool", type: "keyword"},
   {label: "int", type: "keyword"},
   {label: "float", type: "keyword"},
+  {label: "string", type: "keyword", info: 'Declare a string variable, or use string(value) to convert a value to text.'},
+  {label: "color", type: "keyword"},
   {label: "Color", type: "keyword"},
   {label: "Red", type: "keyword"},
   {label: "DarkRed", type: "keyword"},
@@ -195,6 +197,14 @@ export const rawCompletionItems = [
   {label: "setLineColor", type: "function"},
   {label: "setFigureColor", type: "function"},
   {label: "setFps", type: "function"},
+  {label: "text", type: "function", info: 'text(x, y, content, color: ..., size: ..., font: ..., align: ..., bold: ..., italic: ..., lineHeight: ...)'},
+  {label: "setTextColor", type: "function"},
+  {label: "setTextSize", type: "function"},
+  {label: "setTextFont", type: "function"},
+  {label: "setTextAlign", type: "function"},
+  {label: "setTextBold", type: "function"},
+  {label: "setTextItalic", type: "function"},
+  {label: "setTextLineHeight", type: "function"},
 ];
 
 export const quantaCompletion = QuantaLanguage.data.of({

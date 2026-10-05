@@ -17,7 +17,9 @@ function      =  { fn_header ~ "{" ~ block ~ "}" }
 statement      =  { (command | init_statement | if_statement | for_statement | while_statement | return_statement) }
 command        =  { function_call ~ ";" }
 function_call  =  { ident ~ "(" ~ params? ~ ")" }
-params         = _{ expression ~ ("," ~ expression)* }
+params         = _{ argument ~ ("," ~ argument)* }
+argument       = _{ named_argument | expression }
+named_argument = { ident ~ ":" ~ expression }
 init_statement =  { type_name? ~ initialization  ~ ";" }
 initialization =  { noun ~ "=" ~ expression }
 const_key      =  {"const"}
@@ -65,7 +67,7 @@ operator = {
   | "||"
   | "!"
 }
-string_literal = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+string_literal = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 array_literal = { "{" ~ (term ~ ("," ~ term)*)?  ~ "}" }
 expanded_array_literal = { "{" ~ term ~ "..." ~ "}" }
 boolean = { "true" | "false" }

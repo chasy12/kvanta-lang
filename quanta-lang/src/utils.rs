@@ -11,3 +11,4 @@
 pub mod canvas;
 pub mod message;
 pub mod scheduler;
+pub mod text;

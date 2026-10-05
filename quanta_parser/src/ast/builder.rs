@@ -33,6 +33,7 @@ pub fn build_ast_from_doc(&mut self, docs: Pairs<Rule>) -> Result<AstProgram, Er
     self.function_signatures.insert(String::from("ceil"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("floor"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Int))));
+    self.function_signatures.insert(String::from("string"), (vec![], Some(Type::typ(BaseType::StringType))));
     //self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
     self.function_signatures.insert(String::from("sqrt"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
     self.function_signatures.insert(String::from("random"), (vec![Type::typ(BaseType::Int), Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Int))));
@@ -181,10 +182,28 @@ fn build_ast_from_statement(&self, statement: Pairs<Rule>) -> Result<AstNode, Er
 fn build_ast_from_command(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstNode, Error> {
     let mut iter = command.into_iter().next().unwrap().into_inner().into_iter();
     let name = self.build_ast_from_ident(iter.next().unwrap())?;
-    let args = self.build_ast_from_arglist(iter)?;
+    let mut args = vec![];
+    let mut named_args = vec![];
+    for pair in iter {
+        if pair.as_rule() == Rule::named_argument {
+            if name != "text" {
+                return Err(Error::parse("Named arguments are only supported by text()".into(), coords!(pair)));
+            }
+            let mut parts = pair.into_inner();
+            let option = self.build_ast_from_ident(parts.next().unwrap())?;
+            let expr = self.build_ast_from_expression(parts.next().unwrap())?;
+            named_args.push((option, expr));
+        } else {
+            if !named_args.is_empty() {
+                return Err(Error::parse("Positional arguments must come before named text options".into(), coords!(pair)));
+            }
+            args.push(self.build_ast_from_expression(pair)?);
+        }
+    }
     return Ok(AstNode{statement: AstStatement::Command { 
         name: name,
-        args: args
+        args: args,
+        named_args
     }, coords});
 }
 
@@ -213,6 +232,9 @@ fn build_ast_from_noun(&self, ident: Pair<Rule>) -> Result<VariableCall, Error> 
 fn build_ast_from_arglist(&self, args: Pairs<Rule>) -> Result<Vec<Expression>, Error> {
     let mut expressions = vec![];
     for pair in args {
+        if pair.as_rule() == Rule::named_argument {
+            return Err(Error::parse("Named arguments are only supported by text()".into(), coords!(pair)));
+        }
         expressions.push(self.build_ast_from_expression(pair)?);
     }
     Ok(expressions)
@@ -506,7 +528,28 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
         Rule::integer => Ok(BaseValueType::Int(val.as_str().parse::<i32>().unwrap())),
         Rule::decimal => Ok(BaseValueType::Float(val.as_str().parse::<f32>().unwrap())),
         Rule::boolean => Ok(BaseValueType::Bool(val.as_str() == "true")),
-        Rule::string_literal  => Ok(BaseValueType::StringVal(String::from(&val.as_str()[1..val.as_str().len()-1]))),
+        Rule::string_literal => {
+            let literal = val.as_str();
+            let mut chars = literal[1..literal.len() - 1].chars();
+            let mut decoded = String::new();
+            while let Some(ch) = chars.next() {
+                if ch != '\\' {
+                    decoded.push(ch);
+                    continue;
+                }
+                let escaped = match chars.next() {
+                    Some('n') => '\n',
+                    Some('r') => '\r',
+                    Some('t') => '\t',
+                    Some('"') => '"',
+                    Some('\\') => '\\',
+                    Some(other) => return Err(Error::parse(format!("Unknown string escape: \\{}", other), coords)),
+                    None => return Err(Error::parse("Incomplete string escape".into(), coords)),
+                };
+                decoded.push(escaped);
+            }
+            Ok(BaseValueType::StringVal(decoded))
+        },
         Rule::color   => {return self.build_ast_from_color(val);},
         Rule::key     => {return self.build_ast_from_key(val);},
         Rule::noun   => Ok(BaseValueType::Id(self.build_ast_from_noun(val)?)),

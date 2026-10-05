@@ -150,6 +150,7 @@ export const OP = Object.freeze({
   POLYGON: 7,    // n, then n coordinates x1, y1, x2, y2, …
   STYLE: 8,      // fill 0xRRGGBBAA, stroke 0xRRGGBBAA, line width
   PRINT: 9,      // index into `strings`
+  TEXT: 10,     // x, y, content index, color, size, font index, align index, bold, italic, line height
 });
 
 /**
@@ -173,7 +174,7 @@ export function isAnimationMode() {
  * when `present` is true, i.e. once per `frame()`.
  *
  * @param {ArrayLike<number>} ops     - Opcodes followed by their arguments (see `OP`).
- * @param {string[]}          strings - Messages referenced by `PRINT` operations.
+ * @param {string[]}          strings - Text, fonts and alignment referenced by operations.
  * @param {boolean} [present=false]   - Show the result even in animation mode.
  */
 export function drawCommands(ops, strings, present = false) {
@@ -243,6 +244,26 @@ export function drawCommands(ops, strings, present = false) {
         console.log('Print:' + strings[ops[i + 1]]);
         i += 2;
         break;
+      case OP.TEXT: {
+        const x = ops[i + 1], y = ops[i + 2];
+        const content = strings[ops[i + 3]];
+        const size = ops[i + 5];
+        const font = strings[ops[i + 6]];
+        const genericFonts = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded'];
+        const family = genericFonts.includes(font) ? font : `"${font.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+        ctx.save();
+        ctx.fillStyle = colorToCss(ops[i + 4]);
+        ctx.font = `${ops[i + 9] ? 'italic' : 'normal'} ${ops[i + 8] ? 'bold' : 'normal'} ${size}px ${family}`;
+        ctx.textAlign = strings[ops[i + 7]];
+        ctx.textBaseline = 'top';
+        const lines = content.split(/\r\n|\n|\r/);
+        for (let line = 0; line < lines.length; line++) {
+          ctx.fillText(lines[line], x, y + line * size * ops[i + 10]);
+        }
+        ctx.restore();
+        i += 11;
+        break;
+      }
       default:
         console.warn('Unknown drawing operation', ops[i], 'at', i);
         i = ops.length;
