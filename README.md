@@ -36,6 +36,42 @@ Arrays can be nested: `array<array<int, 3>, 3> grid = { {0,1,2}, {3,4,5}, {6,7,8
 
 Expanding array syntax: `array<int, 10> zeros = {0...};`
 
+Arrays can also put their dimensions after the variable name:
+
+```cpp
+int values[2] = {10, 20};
+int grid[2][3] = {{1, 2, 3}, {4, 5, 6}};
+int zeros[2][3];
+```
+
+Each dimension must be a positive integer literal. `int grid[2][3]` has two
+rows with three integers each, the same type as `array<array<int, 3>, 2>`.
+An initializer must match that nested shape. Without an initializer, every
+element gets its type's default: `0`, `0.0`, `false`, `""` or `Color::Black`
+for `int`, `float`, `bool`, `string` or `color`, respectively.
+
+Both declaration forms support indexing, assignment, function arguments,
+`len()` and array iteration. Indexes start at zero: `grid[1][2]` accesses the
+last element of the second row. `len(values)` returns an `int` with the number
+of outer elements, so `len(grid)` is `2` and `len(grid[0])` is `3`.
+You can use it directly in an index: `values[len(values) - 1]`.
+
+Bracket dimensions also work in globals and function parameters:
+
+```cpp
+global {
+    int grid[2][3];
+}
+
+func rowCount(int values[2][3]) -> int {
+    return len(values);
+}
+
+func main() {
+    int rows = rowCount(grid);
+}
+```
+
 Strings support Unicode, concatenation with `+`, and comparisons with `==` and `!=`.
 They work in variables, arrays, function arguments and return values. Both operands
 of a string operation must be strings. Use `\"`, `\\`, `\n`, `\r` and `\t` for
@@ -57,7 +93,7 @@ score = score + 1;
 `string(score)` when a string is required. The conversion takes exactly one
 argument and accepts strings, numbers, booleans, colors and arrays.
 An expansion such as `{0...}` needs a sized array declaration before you can
-display or convert it, for example `array<int, 3> values = {0...}; text(100, 100, values);`.
+display or convert it, for example `int values[3] = {0...}; text(100, 100, values);`.
 
 ### Drawing Commands
 
@@ -159,13 +195,38 @@ random(a, b)      -- random int in [a, b]
 ```
 if (condition) {
     ...
+} else if (otherCondition) {
+    ...
 } else {
     ...
 }
 
 for i in (0..10) { ... }    -- inclusive range; decrements if from > to
+for value in values { ... } -- visits each element of an array
 while (condition) { ... }
 ```
+
+An `else if` chain checks conditions in order and runs the first matching
+branch. It can end with an `else` branch.
+
+Use `break;` to exit the innermost loop and `continue;` to skip to its next
+iteration. Both work in range loops, array loops and `while` loops. They must
+appear inside a loop in the same function.
+
+```cpp
+int values[4] = {10, 20, 30, 40};
+for value in values {
+    if (value == 20) { continue; }
+    if (value == 40) { break; }
+    circle(value, 100, 5);
+}
+```
+
+Array iteration takes a snapshot when the loop starts. Each iteration gets a
+copy of an element, including a copy of a row for nested arrays. Assigning to
+the loop variable does not change the source array, and changing the source
+array does not affect the remaining iterations. The loop variable is local
+to the loop.
 
 ### Functions
 

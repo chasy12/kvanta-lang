@@ -2,35 +2,39 @@
 source_file   =  _{ forest | block }
 block         =  { statement* }
 global_block  =  { "global" ~ "{" ~ strong_init* ~"}" }
-strong_init   =  { type_name ~ initialization  ~ ";"}
+strong_init   =  { (sized_declaration | type_name ~ initialization) ~ ";"}
 
 forest 		  = { (function | global_block)+ }
 bracket_block =  { "{" ~ block ~ "}" }
 newline       = _{ "\n" | "\r" }
 WHITESPACE    = _{ " " | "\t" | "\n" | "\r" }
 
-fn_arg  = {type_name ~ ident}
+fn_arg  = {type_name ~ ident ~ array_dimension*}
 fn_arg_list = {(fn_arg ~ ("," ~ fn_arg)*)?}
 fn_header = { "func" ~ ident ~ "(" ~ fn_arg_list ~ ")" ~ ("->" ~ type_name)? }
 function      =  { fn_header ~ "{" ~ block ~ "}" }
 
-statement      =  { (command | init_statement | if_statement | for_statement | while_statement | return_statement) }
+statement      =  { (command | init_statement | if_statement | for_statement | while_statement | return_statement | break_statement | continue_statement) }
 command        =  { function_call ~ ";" }
 function_call  =  { ident ~ "(" ~ params? ~ ")" }
 params         = _{ argument ~ ("," ~ argument)* }
 argument       = _{ named_argument | expression }
 named_argument = { ident ~ ":" ~ expression }
-init_statement =  { type_name? ~ initialization  ~ ";" }
+init_statement =  { (sized_declaration | type_name? ~ initialization) ~ ";" }
+sized_declaration = { type_name ~ ident ~ array_dimension+ ~ ("=" ~ expression)? }
+array_dimension = { "[" ~ integer ~ "]" }
 initialization =  { noun ~ "=" ~ expression }
 const_key      =  {"const"}
 
 if_statement    =  { "if" ~ "(" ~ expression ~ ")" ~ bracket_block ~ else_block?}
-else_block      = _{ "else" ~ bracket_block }
-for_statement   =  { "for" ~ ident ~ "in" ~ range ~ bracket_block }
+else_block      = _{ "else" ~ (if_statement | bracket_block) }
+for_statement   =  { "for" ~ ident ~ "in" ~ (range | expression) ~ bracket_block }
 range           =  { "(" ~ expression ~ ".." ~ expression ~ ")" }
 numVar          = _{ integer | noun }
 while_statement =  { "while" ~ "(" ~ expression ~ ")" ~ bracket_block }
 return_statement = { "return" ~ expression ~ ";" }
+break_statement = { "break" ~ ";" }
+continue_statement = { "continue" ~ ";" }
 
 type_name      =  { const_key? ~ (array_type | primitive_type) }
 primitive_type = { "bool" | "int" | "color" | "float" | "string" }
