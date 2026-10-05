@@ -263,7 +263,7 @@ Color::Transparent                  -- no fill / transparent
 ### Math Functions
 
 ```
-abs(x)            -- absolute value
+abs(x)            -- absolute value (int -> int, float -> float)
 round(x)          -- round to nearest int
 ceil(x)           -- round up
 floor(x)          -- round down
@@ -271,6 +271,9 @@ sqrt(x)           -- square root
 decimal(x)        -- cast int to float  (5 / 2 == 2, decimal(5) / 2 == 2.5)
 random(a, b)      -- random int in [a, b]
 ```
+
+`abs()` takes one numeric argument. For the minimum integer, `-2147483648`,
+its positive absolute value does not fit in `int`, so it reports a runtime error.
 
 ### Control Flow
 
@@ -510,6 +513,13 @@ Interface strings live in `web/i18n.js`. Compiler and runtime error messages are
 translated in `web/error-messages.js`, keyed by the Rust format string. When you add or
 change an error message in the Rust sources, add its Ukrainian translation there:
 `npm test` fails and lists any message without one.
+
+## Running interpreter tests
+
+```bash
+cargo test --manifest-path quanta-lang/Cargo.toml
+cargo test --manifest-path quanta_parser/Cargo.toml
+```
 
 ## Running web runtime tests
 

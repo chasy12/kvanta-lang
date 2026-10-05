@@ -136,7 +136,8 @@ impl Resolver {
     fn arguments(&mut self, name: &str, args: &mut [Expression], variables: &Variables) {
         let signature = self.signatures.get(name).cloned();
         for (index, arg) in args.iter_mut().enumerate() {
-            let expected = if name == "polygon" { Some(Type::typ(BaseType::Int)) }
+            let expected = if name == "abs" { self.hint(arg, variables).filter(numeric) }
+                else if name == "polygon" { Some(Type::typ(BaseType::Int)) }
                 else { signature.as_ref().and_then(|(params, _)| params.get(index)).map(|(_, typ)| typ.clone()) };
             self.expression(arg, expected.as_ref(), variables);
         }
@@ -175,6 +176,7 @@ impl Resolver {
             BaseValueType::StringVal(_) => Some(Type::typ(BaseType::StringType)),
             BaseValueType::Color(..) | BaseValueType::RandomColor(_) => Some(Type::typ(BaseType::Color)),
             BaseValueType::FunctionCall(name, _, _) if name == "input" => None,
+            BaseValueType::FunctionCall(name, args, _) if name == "abs" => args.first().and_then(|arg| self.hint(arg, variables)).filter(numeric),
             BaseValueType::FunctionCall(name, _, _) => self.signatures.get(name).and_then(|(_, typ)| typ.clone()),
             BaseValueType::Array(values) => values.iter().find_map(|value| self.value_hint(value, variables))
                 .map(|inner| Type { type_name: TypeName::Array(Box::new(Some(inner)), values.len()), is_const: false }),
@@ -223,6 +225,15 @@ impl Resolver {
         match &mut value.val {
             BaseValueType::Id(variable) => self.variable_indices(variable, variables),
             BaseValueType::FunctionCall(name, args, typ) => {
+                if name == "abs" {
+                    let hint = expected.filter(|typ| numeric(typ)).cloned()
+                        .or_else(|| args.first().and_then(|arg| self.hint(arg, variables)).filter(numeric));
+                    for (index, arg) in args.iter_mut().enumerate() {
+                        self.expression(arg, if index == 0 { hint.as_ref() } else { None }, variables);
+                    }
+                    if let Some(actual) = args.first().and_then(|arg| self.hint(arg, variables)).filter(numeric) { *typ = actual; }
+                    return;
+                }
                 self.arguments(name, args, variables);
                 if name != "input" || !args.is_empty() { return; }
                 let reader = match expected.map(|typ| &typ.type_name) {

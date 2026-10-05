@@ -587,8 +587,16 @@ impl Execution {
                 Ok(Some(flt(num.sqrt(), coords)))
             },
             "abs" => {
-                let num = expect_arg!("abs", vals, 0, Float(v) => *v);
-                Ok(Some(flt(num.abs(), coords)))
+                match vals.get(0) {
+                    Some(BaseValue{val: BaseValueType::Int(v), coords: _}) => match v.checked_abs() {
+                        Some(result) => Ok(Some(int(result, coords))),
+                        None => Err(Error::runtime(format!("abs: {} has no int absolute value (overflow)", v), coords)),
+                    },
+                    Some(BaseValue{val: BaseValueType::Float(v), coords: _}) => Ok(Some(flt(v.abs(), coords))),
+                    Some(other) => Err(Error::runtime(format!("abs: Expected argument type int or float but got {}",
+                        other.get_type(&|_| Some(Type::typ(BaseType::Int)))?.to_string()), coords)),
+                    None => Err(Error::runtime(String::from("abs: Expected 1 argument but got 0"), coords)),
+                }
             },
             "decimal" => {
                 let num = expect_arg!("decimal", vals, 0, Int(v) => *v);

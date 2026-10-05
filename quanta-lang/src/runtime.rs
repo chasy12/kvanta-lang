@@ -203,3 +203,84 @@ impl Runtime {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::executor::block_on;
+    use quanta_parser::{ast::{AstProgram, AstStatement, BaseValueType}, parse_ast};
+
+    use crate::{program::create_program, runtime::Runtime, utils::canvas::Canvas};
+
+    // Type checks `source` and evaluates the expression of its last variable initialization.
+    // Evaluate expressions directly to avoid the browser scheduler used by statements.
+    fn eval_last_init(source: &str) -> Result<BaseValueType, String> {
+        let ast = parse_ast(source).map_err(|e| e.to_string())?;
+        let mut program = create_program(ast);
+        program.type_check().map_err(|e| e.to_string())?;
+        let expr = match &program.lines {
+            AstProgram::Block(block) => block.nodes.iter().rev().find_map(|node| match &node.statement {
+                AstStatement::Init { expr, .. } => Some(expr.clone()),
+                _ => None,
+            }),
+            AstProgram::Forest(_) => None,
+        }.expect("source must contain a variable initialization");
+        let canvas = Canvas::new();
+        let runtime = block_on(Runtime::new(program, canvas));
+        let value = block_on(runtime.main_execution.clone().calculate_expression(&expr)).map_err(|e| e.to_string())?;
+        Ok(value.val)
+    }
+
+    #[test]
+    fn abs_of_int_returns_int() {
+        assert_eq!(eval_last_init("int x = abs(-3);"), Ok(BaseValueType::Int(3)));
+        assert_eq!(eval_last_init("int x = abs(4);"), Ok(BaseValueType::Int(4)));
+    }
+
+    #[test]
+    fn abs_of_float_returns_float() {
+        assert_eq!(eval_last_init("float x = abs(-3.5);"), Ok(BaseValueType::Float(3.5)));
+        assert_eq!(eval_last_init("float x = abs(-1.5) * 2.0;"), Ok(BaseValueType::Float(3.0)));
+    }
+
+    #[test]
+    fn abs_of_float_cannot_be_assigned_to_int() {
+        assert!(eval_last_init("int x = abs(-3.5);").is_err());
+    }
+
+    #[test]
+    fn abs_rejects_non_numeric_argument() {
+        assert!(eval_last_init("int x = abs(true);").is_err());
+    }
+
+    #[test]
+    fn abs_preserves_zero_and_nested_numeric_types() {
+        assert_eq!(eval_last_init("int x = abs(0);"), Ok(BaseValueType::Int(0)));
+        assert_eq!(eval_last_init("float x = abs(0.0);"), Ok(BaseValueType::Float(0.0)));
+        assert_eq!(eval_last_init("int x = abs(abs(-3) - 5);"), Ok(BaseValueType::Int(2)));
+        assert_eq!(eval_last_init("float x = abs(abs(-3.5) - 5.0);"), Ok(BaseValueType::Float(1.5)));
+    }
+
+    #[test]
+    fn abs_reports_minimum_integer_overflow() {
+        let error = eval_last_init("int x = abs(-2147483647 - 1);").unwrap_err();
+        assert!(error.contains("abs: -2147483648 has no int absolute value (overflow)"), "{}", error);
+    }
+
+    #[test]
+    fn abs_checks_expression_and_command_arguments() {
+        for source in [
+            "int x = abs();", "int x = abs(1, 2);", "int x = abs(true);",
+            "int x = abs(\"text\");", "abs();", "abs(1, 2);", "abs(true);", "abs(\"text\");",
+        ] {
+            let ast = parse_ast(source).unwrap();
+            assert!(create_program(ast).type_check().is_err(), "{}", source);
+        }
+        for source in [
+            "abs(-3);", "abs(-3.5);",
+            "func magnitude(float value) -> float { return abs(value); } func main() { float x = magnitude(-3.5); }",
+        ] {
+            let ast = parse_ast(source).unwrap();
+            assert!(create_program(ast).type_check().is_ok(), "{}", source);
+        }
+    }
+}

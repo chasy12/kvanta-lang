@@ -39,3 +39,18 @@ fn diagnostics_reject_unsized_expansion_display_and_nonarray_length() {
         assert!(!errors(source).is_empty(), "{}", source);
     }
 }
+
+#[test]
+fn absolute_values_preserve_numeric_types_and_infer_inputs() {
+    for source in [
+        "int n=abs(input()); float f=abs(input());",
+        "float f=abs(abs(input())+1.0); print(f);",
+        "abs(-3.5); float f=abs(-3.5); int n=abs(-3);",
+    ] {
+        assert!(errors(source).is_empty(), "{}: {:?}", source, errors(source));
+        assert!(create_program(parse_ast(source).unwrap()).type_check().is_ok(), "{}", source);
+    }
+    assert_eq!(errors("abs(true); abs(\"bad\"); int n=true;").len(), 3);
+    assert!(!errors("abs(input());").is_empty());
+    assert!(!errors("int n=abs(1.5);").is_empty());
+}

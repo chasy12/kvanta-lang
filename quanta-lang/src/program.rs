@@ -541,6 +541,17 @@ impl Program {
             return;
         }
         let types: Vec<_> = args.iter().map(|arg| self.verify_expr(arg, errors)).collect();
+        if name == "abs" {
+            if args.len() != 1 {
+                errors.push(Error::type_er(format!("Function 'abs' expects 1 argument, but got {}", args.len()), coords));
+            }
+            for typ in types.iter().flatten() {
+                if !matches!(typ.type_name, Primitive(Int | Float)) {
+                    errors.push(Error::type_er(format!("Function 'abs' expects argument 'value' of type 'int' or 'float', but got '{}'", typ), coords));
+                }
+            }
+            return;
+        }
         if name == "len" || name == "string" {
             if args.len() != 1 {
                 errors.push(Error::type_er(format!("{} expects 1 argument, got {}", name, args.len()), coords));
@@ -992,6 +1003,9 @@ impl Program {
             if name == "output" {
                 return None;
             }
+            if name == "abs" {
+                return self.type_check_abs(&args, coords).err();
+            }
             if params.len() != args.len() {
                 return Some(Error::logic(format!("Wrong number of arguments for command '{}': got {}, expected {}", name, args.len(), params.len()), coords));
             }
@@ -1311,6 +1325,19 @@ impl Program {
         }
     }
 
+    // abs is generic over numbers: abs(int) -> int, abs(float) -> float
+    fn type_check_abs(&self, args: &[Expression], coords: Coords) -> Result<Type, Error> {
+        if args.len() != 1 {
+            return Err(Error::type_er(format!("Function 'abs' expects 1 argument, but got {}", args.len()), coords));
+        }
+        let arg_type = self.type_check_expr(&args[0])?;
+        match arg_type.type_name {
+            Primitive(Int) => Ok(Type::typ(Int)),
+            Primitive(Float) => Ok(Type::typ(Float)),
+            _ => Err(Error::type_er(format!("Function 'abs' expects argument 'value' of type 'int' or 'float', but got '{}'", arg_type), coords)),
+        }
+    }
+
     fn type_check_baseval(&self, base : &BaseValue) -> Result<Type, Error> {
         use BaseType::*;
         let coords = base.coords;
@@ -1343,6 +1370,9 @@ impl Program {
                 }
                 if name == "string" {
                     return self.type_check_string_conversion(arg_list, base.coords);
+                }
+                if name == "abs" {
+                    return self.type_check_abs(arg_list, base.coords);
                 }
                 match self.function_defs.get(name) {
                     None => Err(Error::type_er(format!("Unknown function '{}'", name), base.coords)),

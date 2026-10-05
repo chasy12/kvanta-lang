@@ -41,7 +41,7 @@ pub fn build_ast_from_doc(&mut self, docs: Pairs<Rule>) -> Result<AstProgram, Er
     self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("len"), (vec![], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("string"), (vec![], Some(Type::typ(BaseType::StringType))));
-    //self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
+    // abs also takes a float (returning float); the type checker special-cases it
     self.function_signatures.insert(String::from("sqrt"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
     self.function_signatures.insert(String::from("random"), (vec![Type::typ(BaseType::Int), Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Int))));
     assert!(docs.len() == 1);
