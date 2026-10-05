@@ -10,7 +10,8 @@
  *   - Run the program in the WASM runtime, which hands drawing commands to the
  *     canvas runtime (`canvas-runtime.js`) and paces frames itself.
  *   - Wire up keyboard and mouse events so the running program can react to input.
- *   - Show compile and runtime errors in a bar under the editor.
+ *   - Show print() output, run status and errors in the console under the canvas.
+ *   - Switch the interface between English and Ukrainian.
  *   - Share programs as links (`#code=...`) and load them on open.
  *   - Handle file load / save and canvas image export.
  */
@@ -24,7 +25,6 @@ import { oneDark, oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import {barf, dracula} from 'thememirror';
 //import { autocompletion } from "@codemirror/autocomplete";
 import {EditorState, RangeSetBuilder, EditorSelection, Compartment} from "@codemirror/state"
-import { HighlightStyle, tags as t } from "@codemirror/highlight";
 
 import {
   EditorView, keymap, highlightSpecialChars, drawSelection,
@@ -50,9 +50,11 @@ import { quanta, quantaSyntax, quantaLanguageSupport } from "./quanta-support.ts
 import { quantaTheme } from "./custom-theme";
 
 // Canvas runtime (drawCommands + utilities)
-import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari } from "./canvas-runtime.js";
+import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
+import { createConsole, formatDuration } from "./console-panel.js";
+import { t, translateError, getLanguage, setLanguage, onLanguageChange, applyTranslations } from "./i18n.js";
 
 // WASM glue (wasm-pack output); adjust crate name/path
 import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
@@ -60,10 +62,14 @@ import initWasm, { Compiler } from "../quanta-lang/pkg/quanta_lang.js";
 
 const runBtn = document.getElementById("runBtn");
 const canvas = document.getElementById("canvas");
-const errorBar = document.getElementById("errorBar");
 const shareBtn = document.getElementById("shareBtn");
 /** Frame rate readout, shown only while an animation is running. */
-const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"));
+const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"), { format: (fps) => t("fps", fps) });
+/** print() output, run status and errors. */
+const consolePanel = createConsole(document.getElementById("consoleLines"), {
+  onJump: (row, column) => jumpTo(row, column),
+});
+setPrintHandler((text) => consolePanel.print(text));
 
 /** The live WASM runtime instance; `undefined` when no program is executing. */
 let runtime = undefined;
@@ -140,6 +146,9 @@ const newlineSameIndent = keymap.of([{
 // Diagnostics helpers
 // ---------------------------------------------------------------------------
 
+/** The error shown in the editor, so it can be shown again in another language. */
+let shownError = null;
+
 /**
  * Display a compiler/runtime error as a CodeMirror inline diagnostic.
  *
@@ -147,6 +156,10 @@ const newlineSameIndent = keymap.of([{
  * @param {{ start_row: number, start_column: number, end_row: number, end_column: number, get_error_message(): string }} err
  */
 export function showError(editor, err) {
+  if (err.start_row > editor.state.doc.lines || err.end_row > editor.state.doc.lines) {
+    showOk(editor);
+    return;
+  }
   let diagnostics = [];
   const from_line = editor.state.doc.line(Math.max(1, err.start_row));
   const from = Math.min(from_line.to, from_line.from + err.start_column);
@@ -156,43 +169,38 @@ export function showError(editor, err) {
     from: from,
     to: to, // adjust for token length if needed
     severity: "error",
-    message: err.get_error_message()
+    message: translateError(err.get_error_message())
   });
 
+  shownError = err;
   editor.dispatch(setDiagnostics(editor.state, diagnostics));
 }
 
 /**
- * Log an error to the browser console and show it in the bar under the editor.
- * Clicking the bar moves the cursor to the error.
+ * Show an error in the console. Clicking its line number moves the cursor to it.
  *
- * @param {{ start_row: number, start_column: number, end_row: number, end_column: number, get_error_message(): string }} err
+ * @param {{ error_code: number, start_row: number, start_column: number, get_error_message(): string }} err
  */
 export function reportError(err) {
-  console.log("Error:" + err.get_error_message() + " at "
-      + err.start_row + ":" + err.start_column
-      + " - " + err.end_row + ":" + err.end_column);
-  errorBar.textContent = "Line " + err.start_row + ": " + err.get_error_message();
-  errorBar.dataset.row = String(err.start_row);
-  errorBar.dataset.column = String(err.start_column);
-  errorBar.hidden = false;
+  consolePanel.error(err);
 }
 
 /**
- * Show a message that has no source location (e.g. an internal failure).
+ * Show an error that has no source location (e.g. an internal failure).
  *
  * @param {string} message
  */
 export function reportMessage(message) {
-  errorBar.textContent = message;
-  delete errorBar.dataset.row;
-  delete errorBar.dataset.column;
-  errorBar.hidden = false;
+  consolePanel.message(message);
 }
 
-/** Hide the error bar. */
-export function hideErrorBar() {
-  errorBar.hidden = true;
+/** Move the cursor to `row` (1-based) and `column` and focus the editor. */
+function jumpTo(row, column) {
+  const doc = editor.state.doc;
+  const line = doc.line(Math.min(doc.lines, Math.max(1, row)));
+  const pos = Math.min(line.to, line.from + column);
+  editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  editor.focus();
 }
 
 /**
@@ -201,6 +209,7 @@ export function hideErrorBar() {
  * @param {import("@codemirror/view").EditorView} editor
  */
 export function showOk(editor) {
+  shownError = null;
   editor.dispatch(setDiagnostics(editor.state, []));
 }
 
@@ -210,7 +219,8 @@ export function showOk(editor) {
 
 const STORAGE_KEY = "quanta-editor-code";
 
-const savedCode = localStorage.getItem(STORAGE_KEY);
+let savedCode = null;
+try { savedCode = localStorage.getItem(STORAGE_KEY); } catch {}
 /** Program from a shared link (`#code=...`), if the page was opened with one. */
 const sharedCode = await decodeCode(location.hash);
 /** Shared program first, then the saved one, then this default. */
@@ -283,8 +293,8 @@ let typingTimer = null;
  */
 const onTyping = EditorView.updateListener.of(update => {
   if (update.docChanged) {
+    shownError = null;
     update.view.dispatch(setDiagnostics(update.state, []));
-    hideErrorBar();
     // Once the shared program is edited it is the user's own: drop the link
     // from the address bar so a reload shows the saved edits.
     if (isSharedHash(location.hash)) {
@@ -297,7 +307,7 @@ const onTyping = EditorView.updateListener.of(update => {
       const code = update.state.doc.toString();
 
       tryCompile(update, code);
-      localStorage.setItem(STORAGE_KEY, editor.state.doc.toString());
+      try { localStorage.setItem(STORAGE_KEY, editor.state.doc.toString()); } catch {}
 
     }, 1000); // 1000ms = 1 second pause
   }
@@ -451,8 +461,13 @@ function clearErrors() {
   editor.dispatch(setDiagnostics(editor.state, []));
 }
 
-/** Stop the running program, clear the runtime reference and restore the idle UI. */
-function doStop() {
+/**
+ * Stop the running program, clear the runtime reference and restore the idle UI.
+ *
+ * @param {boolean} [announce=true] - Note in the console that the program was stopped.
+ */
+function doStop(announce = true) {
+  if (announce && isRunning) consolePanel.info('stopped');
   runtime?.stop();
   runtime = undefined;
   cancelNow();
@@ -510,7 +525,8 @@ function doRun() {
       fpsCounter.reset();
       isRunning = true;
       runBtn.disabled = true;
-      hideErrorBar();
+      consolePanel.clear();
+      consolePanel.start();
       setup();
       await initWasm();
       const src = editor.state.doc.toString();
@@ -526,8 +542,20 @@ function doRun() {
         showOk(editor);
       }
       setRunningUI();
+      consolePanel.info('started');
+      const startedAt = performance.now();
       const activeRuntime = compilation_result.get_runtime();
       runtime = activeRuntime;
+      // An error in a keyboard or mouse handler ends the program.
+      activeRuntime.set_error_handler((err) => {
+        if (runId !== currentRun) return;
+        reportError(err);
+        try {
+          showError(editor, err);
+        } finally {
+          doStop(false);
+        }
+      });
       activeRuntime.set_renderer((ops, strings, present) => {
         drawCommands(ops, strings, present);
         if (present && isAnimationMode()) {
@@ -540,10 +568,13 @@ function doRun() {
       if (err.error_code != 0) {
         showError(editor, err);
         reportError(err);
+      } else {
+        const duration = performance.now() - startedAt;
+        consolePanel.info('finished', () => formatDuration(duration));
       }
     } catch (e) {
       console.error(e);
-      reportMessage("Error: " + (e?.message ?? String(e)));
+      reportMessage(e?.message ?? String(e));
     } finally {
       if (runId === currentRun) {
         fpsCounter.reset();
@@ -558,10 +589,16 @@ function doRun() {
 // UI state helpers
 // ---------------------------------------------------------------------------
 
+/** Show `key`'s text on `button` and keep it when the language changes. */
+function setButtonText(button, key) {
+  button.dataset.i18n = key;
+  button.textContent = t(key);
+}
+
 /** Switch the Run button to "Stop" and focus the canvas. */
 function setRunningUI() {
   isRunning = true;
-  runBtn.textContent = 'Stop';
+  setButtonText(runBtn, 'stop');
   runBtn.dataset.state = 'stop';
   runBtn.disabled = false;
   canvas.focus();
@@ -570,7 +607,7 @@ function setRunningUI() {
 /** Switch the Run button back to "Run your program!" and mark execution idle. */
 function setIdleUI() {
   isRunning = false;
-  runBtn.textContent = 'Run your program!';
+  setButtonText(runBtn, 'run');
   runBtn.dataset.state = 'run';
   runBtn.disabled = false;
 }
@@ -603,15 +640,33 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-/** Move the cursor to the error shown in the bar. */
-errorBar.addEventListener('click', () => {
-  if (!errorBar.dataset.row) return;
-  const doc = editor.state.doc;
-  const line = doc.line(Math.min(doc.lines, Math.max(1, Number(errorBar.dataset.row))));
-  const pos = Math.min(line.to, line.from + Number(errorBar.dataset.column));
-  editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
-  editor.focus();
+document.getElementById("consoleClear").addEventListener('click', () => consolePanel.clear());
+
+// ---------------------------------------------------------------------------
+// Language
+// ---------------------------------------------------------------------------
+
+const languageButtons = document.querySelectorAll('[data-lang]');
+
+/** Mark the button of the current language as pressed. */
+function showLanguage() {
+  for (const button of languageButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.lang === getLanguage()));
+  }
+}
+
+for (const button of languageButtons) {
+  button.addEventListener('click', () => setLanguage(button.dataset.lang));
+}
+
+onLanguageChange(() => {
+  showLanguage();
+  consolePanel.render();
+  if (shownError) showError(editor, shownError);
 });
+
+applyTranslations();
+showLanguage();
 
 // ---------------------------------------------------------------------------
 // Share links
@@ -624,10 +679,10 @@ shareBtn.addEventListener('click', async () => {
   window.history.replaceState(null, "", url);
   try {
     await navigator.clipboard.writeText(url);
-    shareBtn.textContent = 'Link copied';
-    setTimeout(() => { shareBtn.textContent = 'Share'; }, 2000);
+    setButtonText(shareBtn, 'linkCopied');
+    setTimeout(() => setButtonText(shareBtn, 'share'), 2000);
   } catch {
-    prompt("Copy this link:", url);
+    prompt(t('promptCopyLink'), url);
   }
 });
 
@@ -711,7 +766,7 @@ document.getElementById("downloadBtn").addEventListener("click", () => {
   const code = editor.state.doc.toString();
 
   // Ask user for filename
-  let filename = prompt("Enter filename:", "program");
+  let filename = prompt(t('promptFilename'), t('defaultFilename'));
   if (!filename) return; // user pressed Cancel
 
   // Ensure extension
@@ -736,7 +791,7 @@ document.getElementById("saveBtn").addEventListener("click", () => {
   const canvas = document.getElementById("canvas");
   const image = canvas.toDataURL("image/jpeg", 0.95); // 0.95 is quality
 
-  const filename = prompt("Enter painting name:", "painting");
+  const filename = prompt(t('promptPainting'), t('defaultPainting'));
   if (!filename) return; // user pressed Cancel
 
   const link = document.createElement("a");
