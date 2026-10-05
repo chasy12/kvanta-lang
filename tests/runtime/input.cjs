@@ -48,7 +48,7 @@ async function deadline(promise) {
 
   const contextualValues = ['welcome', '1.5', 'name', '2.5'];
   const contextualKinds = [];
-  const contextual = await run('global {string greeting=input();} func next()->float{return input();} func echo(string text)->string{return text;} func main(){float f=next(); string s=echo(input()); f=input(); print(greeting,f,s);}', kind => {
+  const contextual = await run('global {string greeting=input();} func next()->float{return input();} func echo(string message)->string{return message;} func main(){float f=next(); string s=echo(input()); f=input(); print(greeting,f,s);}', kind => {
     contextualKinds.push(kind);
     return Promise.resolve(contextualValues.shift());
   });

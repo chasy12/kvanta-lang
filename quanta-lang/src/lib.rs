@@ -6,6 +6,8 @@ mod read_targets;
 mod execution;
 #[cfg(test)]
 mod control_flow_tests;
+#[cfg(test)]
+mod integration_tests;
 //mod tests;
 mod runtime;
 //mod linear_execution;

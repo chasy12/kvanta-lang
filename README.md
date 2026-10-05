@@ -166,7 +166,7 @@ arrays keep braces and quoted string elements so their structure stays readable.
 
 ```cpp
 int score = 42;
-print("Score:", score, true); // Console: Print:Score: 42 true
+print("Score:", score, true); // Console: Score: 42 true
 text(100, 100, {1, 2, 3});    // Canvas: {1, 2, 3}
 ```
 ### Console Output
@@ -542,4 +542,5 @@ node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/errors.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/read.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+node tests/runtime/integration.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 ```

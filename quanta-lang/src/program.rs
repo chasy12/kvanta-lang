@@ -96,7 +96,7 @@ mod diagnostic_tests {
 
     #[test]
     fn input_inference_preserves_numeric_constraints_and_independent_errors() {
-        assert!(!errors("float f=input()+1;").is_empty());
+        assert!(errors("float f=input()+1;").is_empty());
         assert_eq!(errors("print(input()); int n=true;").len(), 2);
         assert_eq!(errors("if(input()<input()){} int n=true;").len(), 3);
         let arity_errors = errors("int n=input(1);");
@@ -386,7 +386,7 @@ impl Program {
         block.nodes.iter().any(|node| match &node.statement {
             AstStatement::Return { .. } => true,
             AstStatement::If { block, else_block, .. } => Self::contains_return(block) || else_block.as_ref().is_some_and(Self::contains_return),
-            AstStatement::For { block, .. } | AstStatement::While { block, .. } => Self::contains_return(block),
+            AstStatement::For { block, .. } | AstStatement::ForEach { block, .. } | AstStatement::While { block, .. } => Self::contains_return(block),
             _ => false,
         })
     }
@@ -394,9 +394,19 @@ impl Program {
     fn verify_block(&mut self, block: AstBlock, errors: &mut Vec<Error>) -> ReturnType {
         let mut returned = ReturnType::None;
         for node in block.nodes {
+            let coords = node.coords;
             let mut next_return = ReturnType::None;
             match node.statement {
-                AstStatement::Command { name, args } => self.verify_call(&name, &args, node.coords, false, errors),
+                AstStatement::Command { name, args, named_args } => {
+                    self.verify_call(&name, &args, node.coords, false, errors);
+                    self.verify_named_args(&name, &named_args, errors);
+                },
+                AstStatement::Break | AstStatement::Continue => {
+                    if self.loop_depth == 0 {
+                        let keyword = if matches!(node.statement, AstStatement::Break) { "break" } else { "continue" };
+                        errors.push(Error::logic(format!("{} can only be used inside a loop", keyword), node.coords));
+                    }
+                },
                 AstStatement::Init { typ, val, expr } => {
                     let before = errors.len();
                     let verified = self.verify_expr(&expr, errors).is_some();
@@ -435,21 +445,48 @@ impl Program {
                     } else { next_return = if_return.t().cloned().map_or(ReturnType::None, ReturnType::Partial); }
                 },
                 AstStatement::While { clause, block } => {
+                    let before = errors.len();
                     if let Some(typ) = self.verify_expr(&clause, errors) {
                         if typ.type_name != Primitive(Bool) { errors.push(Error::logic(format!("While clause must be a bool expression"), clause.coords)); }
                     }
                     let mut sub = self.create_subprogram(Some(block.clone()));
-                    next_return = sub.verify_block(block, errors);
+                    sub.loop_depth += 1;
+                    let body = sub.verify_block(block.clone(), errors);
+                    next_return = self.verified_loop_flow(before, node.coords, body, errors, || {
+                        self.type_check_while(clause, block).map(|(flow, _)| flow)
+                    });
                 },
                 AstStatement::For { val, from, to, block } => {
+                    let before = errors.len();
+                    if let Err(error) = self.check_loop_variable(&val, node.coords) { errors.push(error); }
                     for expr in [&from, &to] {
                         if let Some(typ) = self.verify_expr(expr, errors) {
                             if typ.type_name != Primitive(Int) { errors.push(Error::logic(format!("For loop range can only be integer values"), expr.coords)); }
                         }
                     }
                     let mut sub = self.create_subprogram(Some(block.clone()));
-                    sub.scope.variables.insert(val, (Type::typ(Int), from));
-                    next_return = sub.verify_block(block, errors);
+                    sub.loop_depth += 1;
+                    sub.scope.variables.entry(val.clone()).or_insert((Type::typ(Int), from.clone()));
+                    let body = sub.verify_block(block.clone(), errors);
+                    next_return = self.verified_loop_flow(before, node.coords, body, errors, || {
+                        self.type_check_for(val, from, to, block, coords).map(|(flow, _)| flow)
+                    });
+                },
+                AstStatement::ForEach { val, iterable, block } => {
+                    let before = errors.len();
+                    if let Err(error) = self.check_loop_variable(&val, node.coords) { errors.push(error); }
+                    let element = match self.verify_expr(&iterable, errors) {
+                        Some(Type { type_name: Array(inner, _), .. }) => Self::mutable_copy_type(inner.as_ref().clone().unwrap_or(Type::typ(Int))),
+                        Some(_) => { errors.push(Error::type_er(String::from("For loop elements must come from an array"), iterable.coords)); Type::typ(Int) },
+                        None => Type::typ(Int),
+                    };
+                    let mut sub = self.create_subprogram(Some(block.clone()));
+                    sub.loop_depth += 1;
+                    sub.scope.variables.entry(val.clone()).or_insert((element, iterable.clone()));
+                    let body = sub.verify_block(block.clone(), errors);
+                    next_return = self.verified_loop_flow(before, node.coords, body, errors, || {
+                        self.type_check_foreach(&val, &iterable, block, coords).map(|(flow, _)| flow)
+                    });
                 },
                 AstStatement::Return { expr } => {
                     if let Some(typ) = self.verify_expr(&expr, errors) { next_return = ReturnType::Full(typ); }
@@ -465,6 +502,38 @@ impl Program {
         returned
     }
 
+    fn verified_loop_flow<F: FnOnce() -> Result<ReturnType, Error>>(&self, before: usize, coords: Coords, body: ReturnType, errors: &mut Vec<Error>, checked: F) -> ReturnType {
+        let (row, col, end_row, end_col) = coords;
+        if errors.len() == before && !errors.iter().any(|error| error.start >= (row,col) && error.finish <= (end_row,end_col)) {
+            match checked() {
+                Ok(flow) => return flow,
+                Err(error) => errors.push(error),
+            }
+        }
+        body.t().cloned().map_or(ReturnType::None, ReturnType::Partial)
+    }
+
+    fn verify_named_args(&self, name: &str, args: &[(String, Expression)], errors: &mut Vec<Error>) {
+        let mut seen = HashSet::new();
+        for (option, expr) in args {
+            let actual = self.verify_expr(expr, errors);
+            if name != "text" {
+                errors.push(Error::type_er(String::from("Named arguments are only supported by text()"), expr.coords));
+                continue;
+            }
+            if !seen.insert(option) { errors.push(Error::logic(format!("Duplicate text option '{}'", option), expr.coords)); }
+            let Some(expected) = option_type(option) else {
+                errors.push(Error::type_er(format!("Unknown text option '{}'", option), expr.coords));
+                continue;
+            };
+            if let Some(actual) = actual {
+                if actual.type_name != Primitive(expected.clone()) {
+                    errors.push(Error::type_er(format!("Text option '{}' expects '{}', got '{}'", option, expected.to_string(), actual), expr.coords));
+                }
+            }
+        }
+    }
+
     fn verify_call(&self, name: &str, args: &[Expression], coords: Coords, value: bool, errors: &mut Vec<Error>) {
         if name == "read" {
             if value { errors.push(Error::type_er(format!("Function {} has no return type", name), coords)); }
@@ -472,6 +541,21 @@ impl Program {
             return;
         }
         let types: Vec<_> = args.iter().map(|arg| self.verify_expr(arg, errors)).collect();
+        if name == "len" || name == "string" {
+            if args.len() != 1 {
+                errors.push(Error::type_er(format!("{} expects 1 argument, got {}", name, args.len()), coords));
+            }
+            for (arg, typ) in args.iter().zip(&types) {
+                if let Some(typ) = typ {
+                    if name == "len" && !matches!(typ.type_name, Array(_, _)) {
+                        errors.push(Error::type_er(String::from("len expects an array argument"), arg.coords));
+                    } else if name == "string" {
+                        if let Err(error) = Self::check_display_type(typ, arg.coords) { errors.push(error); }
+                    }
+                }
+            }
+            return;
+        }
         let Some((params, return_type)) = self.function_defs.get(name) else {
             errors.push(if value { Error::type_er(format!("Unknown function '{}'", name), coords) } else { Error::logic(format!("Unknown command: {}", name), coords) });
             return;
@@ -479,7 +563,14 @@ impl Program {
         if value && return_type.is_none() {
             errors.push(Error::type_er(format!("Function {} has no return type", name), coords));
         }
-        if name == "print" || name == "output" { return; }
+        if name == "print" || name == "output" {
+            if name == "print" {
+                for (arg, typ) in args.iter().zip(&types) {
+                    if let Some(typ) = typ { if let Err(error) = Self::check_display_type(typ, arg.coords) { errors.push(error); } }
+                }
+            }
+            return;
+        }
         if name == "polygon" {
             if args.len() < 6 || args.len() % 2 != 0 { errors.push(Error::logic(format!("Wrong number of arguments for command polygon: got {}, expected at least 6 (even number) for polygon", args.len()), coords)); }
             for (arg, typ) in args.iter().zip(types) {
@@ -492,6 +583,10 @@ impl Program {
         }
         for (((param_name, param_type), arg), typ) in params.iter().zip(args).zip(types) {
             if let Some(typ) = typ {
+                if name == "text" && param_name == "content" {
+                    if let Err(error) = Self::check_display_type(&typ, arg.coords) { errors.push(error); }
+                    continue;
+                }
                 let compatible = if value { param_type.can_assign(&typ) } else { param_type.type_name == typ.type_name };
                 if !compatible {
                     errors.push(if value { Error::type_er(format!("Funcion '{}' expects argument '{}' of type '{}', but got '{}'", name, param_name, param_type, typ), arg.coords) } else { Error::type_er(format!("Wrong type of argument '{}' for command '{}': got '{}', expected '{}'", param_name, name, typ, param_type), arg.coords) });
@@ -521,7 +616,7 @@ impl Program {
                     }
                 }
             }
-            let typ = match self.type_check_var(variable, arg.coords) {
+            let typ = match self.type_check_var_shape(variable, arg.coords) {
                 Ok(typ) => typ,
                 Err(error) => { errors.push(error); continue; }
             };
@@ -566,12 +661,17 @@ impl Program {
             ExpressionType::Value(value) => { self.verify_value(value, errors); },
             ExpressionType::Unary(_, inner) => { self.verify_expr(inner, errors); },
             ExpressionType::Binary(op, lhs, rhs) => {
-                for operand in [lhs.as_ref(), rhs.as_ref()] {
-                    if let Some(typ) = self.verify_expr(operand, errors) {
-                        if *op == Operator::AND || *op == Operator::OR {
-                            if typ.type_name != Primitive(Bool) { errors.push(Error::type_er(format!("Expected bool expression for operator '{:?}', got '{}'", *op, typ), operand.coords)); }
-                        } else if typ.type_name != Primitive(Int) && typ.type_name != Primitive(Float) {
-                            errors.push(Error::type_er(format!("Expected int or float expression for operator '{:?}', got '{}'", *op, typ), operand.coords));
+                let left = self.verify_expr(lhs, errors);
+                let right = self.verify_expr(rhs, errors);
+                let string = [left.as_ref(), right.as_ref()].iter().any(|typ| typ.is_some_and(|typ| typ.type_name == Primitive(StringType)));
+                if !string {
+                    for (operand, typ) in [(lhs.as_ref(), left), (rhs.as_ref(), right)] {
+                        if let Some(typ) = typ {
+                            if *op == Operator::AND || *op == Operator::OR {
+                                if typ.type_name != Primitive(Bool) { errors.push(Error::type_er(format!("Expected bool expression for operator '{:?}', got '{}'", *op, typ), operand.coords)); }
+                            } else if typ.type_name != Primitive(Int) && typ.type_name != Primitive(Float) {
+                                errors.push(Error::type_er(format!("Expected int or float expression for operator '{:?}', got '{}'", *op, typ), operand.coords));
+                            }
                         }
                     }
                 }
@@ -1189,6 +1289,10 @@ impl Program {
                 }
             }
         }
+        self.type_check_var_shape(var, coords)
+    }
+
+    fn type_check_var_shape(&self, var: &VariableCall, coords: Coords) -> Result<Type, Error> {
         let (name, depth) = match var {
             VariableCall::Name(name) => (name, 0),
             VariableCall::ArrayCall(name, inds) => (name, inds.len())

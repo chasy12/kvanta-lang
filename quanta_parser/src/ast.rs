@@ -318,6 +318,24 @@ pub struct SimpleExpression {
 }
 
 impl SimpleExpression {
+    /// Visit calls inside an array index while retaining its restricted AST.
+    pub fn visit_function_calls<F: FnMut(&mut BaseValue)>(&mut self, visitor: &mut F) {
+        match &mut self.expr {
+            SimpleExpressionType::Value(value) => match &mut value.val {
+                SimpleValueType::FunctionCall(function) => visitor(function),
+                SimpleValueType::Id(VariableCall::ArrayCall(_, indices)) => {
+                    for index in indices { index.visit_function_calls(visitor); }
+                }
+                _ => {},
+            },
+            SimpleExpressionType::Unary(_, inner) => inner.visit_function_calls(visitor),
+            SimpleExpressionType::Binary(_, left, right) => {
+                left.visit_function_calls(visitor);
+                right.visit_function_calls(visitor);
+            }
+        }
+    }
+
     pub fn to_expr(self) -> Expression {
         match self.expr {
             SimpleExpressionType::Value(value) => {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import initWasm, { Compiler } from '../../quanta-lang/pkg/quanta_lang.js';
-import { cancelNow, drawCommands } from '../../web/canvas-runtime.js';
+import { cancelNow, drawCommands, setPrintHandler } from '../../web/canvas-runtime.js';
 
 const ctx = globalThis.__mockBufferCtx;
 let drawn;
@@ -382,7 +382,8 @@ describe('sized arrays in input handlers', () => {
   it.each(['mouse', 'keyboard'])('executes normalized defaults in the %s handler', async handler => {
     const signature = handler === 'mouse' ? 'int x, int y' : 'int key';
     const result = await compile(`func ${handler}(${signature}) { int values[2]; print(values); } func main() {}`);
-    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const output = vi.fn();
+    setPrintHandler(output);
     let runtime;
     try {
       expect(result.error_code, result.error_code ? result.get_error_message() : '').toBe(0);
@@ -391,12 +392,12 @@ describe('sized arrays in input handlers', () => {
       await runtime.execute();
       if (handler === 'mouse') runtime.execute_mouse(10, 20);
       else runtime.execute_key('A');
-      await vi.waitFor(() => expect(output).toHaveBeenCalledWith('Print:{0, 0}'));
+      await vi.waitFor(() => expect(output).toHaveBeenCalledWith('{0, 0}'));
     } finally {
       runtime?.stop();
       runtime?.free();
       result.free();
-      output.mockRestore();
+      setPrintHandler(text => console.log(text));
     }
   });
 });

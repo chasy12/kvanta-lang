@@ -34,6 +34,7 @@ fn regions(source: &str) -> Vec<Region> {
             continue;
         }
         if string {
+            if c == '\\' { i += 2; continue; }
             if c == '"' { string = false; }
             i += 1;
             continue;
@@ -189,4 +190,18 @@ mod tests {
         assert_eq!(errors.len(), 2, "{:?}", errors);
         assert_eq!(errors.iter().map(|error| error.start.0).collect::<Vec<_>>(), vec![1, 2]);
     }
+    #[test]
+    fn escaped_quotes_do_not_hide_later_bad_statements() {
+        for source in [r#"print("\";{}");
+circle(1,,2);
+rectangle(1,,2,3);"#, r#"print("a\"b");
+circle(1,,2);
+rectangle(1,,2,3);"#] {
+            let (ast, errors) = parse_ast_recovering(source);
+            assert!(ast.is_some());
+            assert_eq!(errors.len(), 2, "{:?}", errors);
+            assert_eq!(errors.iter().map(|error| error.start.0).collect::<Vec<_>>(), vec![2,3]);
+        }
+    }
+
 }
