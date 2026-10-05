@@ -56,6 +56,8 @@ export const quantaHighlight = styleTags({
   Key: t.moduleKeyword,
   Global: t.keyword,
   Return: t.keyword,
+  Break: t.keyword,
+  Continue: t.keyword,
   Comment: t.lineComment,
   ArithOp: t.arithmeticOperator,
   UnaryOp: t.operator,

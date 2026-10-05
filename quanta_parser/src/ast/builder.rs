@@ -33,6 +33,7 @@ pub fn build_ast_from_doc(&mut self, docs: Pairs<Rule>) -> Result<AstProgram, Er
     self.function_signatures.insert(String::from("ceil"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("floor"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Int))));
+    self.function_signatures.insert(String::from("len"), (vec![], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("string"), (vec![], Some(Type::typ(BaseType::StringType))));
     //self.function_signatures.insert(String::from("abs"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
     self.function_signatures.insert(String::from("sqrt"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Float))));
@@ -71,18 +72,8 @@ fn build_ast_from_forest(&mut self, statements: Pairs<Rule>) -> Result<Functions
                 while let Some(init) = iter.next() {
                     if init.as_rule() == Rule::strong_init {
                         let coords = coords!(init);
-                        let mut init_iter = init.into_inner().into_iter();
-                        let type_name = self.build_ast_from_type(init_iter.next().unwrap())?;
-                        let mut init_iter2 = init_iter.next().unwrap().into_inner().into_iter();
-                        let name = self.build_ast_from_noun(init_iter2.next().unwrap())?;
-                        match name {
-                            VariableCall::ArrayCall(_, _) => return Err(Error::parse(String::from("Array call not allowed in an init statement"), coords)),
-                            VariableCall::Name(n) => {
-                                let expr = self.build_ast_from_expression(init_iter2.next().unwrap())?;
-                                let init_state = AstStatement::Init { typ: type_name, val: n, expr: expr };
-                                init_statements.push((init_state, coords));
-                            }
-                        }
+                        let node = self.build_ast_from_init(init.into_inner(), coords)?;
+                        init_statements.push((node.statement, coords));
                     } else {
                         return Err(Error::parse(format!("Expected global variable initialization, found: {:?}", init.as_rule()), coords!(init)));
                     }
@@ -119,6 +110,7 @@ fn get_function_signature<'a>(&self, statement: Pairs<'a, Rule>) -> Result<HalfP
         let mut arg_iter = arg.into_inner().into_iter();
         let arg_type = self.build_ast_from_type(arg_iter.next().unwrap())?;
         let arg_name = self.build_ast_from_ident(arg_iter.next().unwrap())?;
+        let arg_type = self.build_sized_type(arg_type, arg_iter)?;
         args.push((arg_name, arg_type));
     }
     let typer = {
@@ -175,6 +167,8 @@ fn build_ast_from_statement(&self, statement: Pairs<Rule>) -> Result<AstNode, Er
             let expr = self.build_ast_from_expression(state.into_inner().into_iter().next().unwrap())?;
             Ok(AstNode{statement: AstStatement::Return { expr: expr }, coords: coords})
         }
+        Rule::break_statement => Ok(AstNode { statement: AstStatement::Break, coords }),
+        Rule::continue_statement => Ok(AstNode { statement: AstStatement::Continue, coords }),
         _ => return Err(Error::parse(String::from("Expected a statement!"), coords!(state)))
     }
 }
@@ -474,6 +468,9 @@ fn build_ast_from_expression_inner(&self, expression: Pair<Rule>) -> Result<Expr
 fn build_ast_from_init(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstNode, Error> {
     let mut iter = command.into_iter();
     let mut first = iter.next().unwrap();
+    if first.as_rule() == Rule::sized_declaration {
+        return self.build_ast_from_sized_declaration(first, coords);
+    }
     if let Rule::type_name = first.as_rule() {
         let type_val = self.build_ast_from_type(first)?;
         first = iter.next().unwrap();
@@ -494,6 +491,54 @@ fn build_ast_from_init(&self, command: Pairs<Rule>, coords: Coords) -> Result<As
     Ok(AstNode{statement: AstStatement::SetVal { val: name, expr },coords})
 }
 
+fn build_sized_type<'a>(&self, typ: Type, dimensions: impl Iterator<Item = Pair<'a, Rule>>) -> Result<Type, Error> {
+    let mut sizes = vec![];
+    for dimension in dimensions {
+        let literal = dimension.into_inner().next().unwrap();
+        let size = literal.as_str().parse::<usize>().ok().filter(|size| *size > 0)
+            .ok_or_else(|| Error::parse("Array size must be a positive integer literal".into(), coords!(literal)))?;
+        sizes.push(size);
+    }
+    let is_const = typ.is_const;
+    let mut result = Type { type_name: typ.type_name, is_const: false };
+    for size in sizes.into_iter().rev() {
+        result = Type { type_name: TypeName::Array(Box::new(Some(result)), size), is_const: false };
+    }
+    result.is_const = is_const;
+    Ok(result)
+}
+
+fn build_ast_from_sized_declaration(&self, declaration: Pair<Rule>, coords: Coords) -> Result<AstNode, Error> {
+    let mut parts = declaration.into_inner();
+    let scalar_type = self.build_ast_from_type(parts.next().unwrap())?;
+    let val = self.build_ast_from_ident(parts.next().unwrap())?;
+    let dimensions = parts.clone().take_while(|part| part.as_rule() == Rule::array_dimension).count();
+    let typ = self.build_sized_type(scalar_type, parts.clone().take(dimensions))?;
+    for _ in 0..dimensions {
+        parts.next();
+    }
+    let expr = if let Some(initializer) = parts.next() {
+        self.build_ast_from_expression(initializer)?
+    } else {
+        let mut inner_type = &typ;
+        while let TypeName::Array(inner, _) = &inner_type.type_name {
+            inner_type = inner.as_ref().as_ref().unwrap();
+        }
+        let default = match &inner_type.type_name {
+            TypeName::Primitive(BaseType::Int) => BaseValueType::Int(0),
+            TypeName::Primitive(BaseType::Float) => BaseValueType::Float(0.0),
+            TypeName::Primitive(BaseType::Bool) => BaseValueType::Bool(false),
+            TypeName::Primitive(BaseType::StringType) => BaseValueType::StringVal(String::new()),
+            TypeName::Primitive(BaseType::Color) => BaseValueType::Color(0, 0, 0, 255),
+            _ => return Err(Error::parse("Cannot determine array element default".into(), coords)),
+        };
+        Expression { expr_type: ExpressionType::Value(BaseValue {
+            val: BaseValueType::ExpandingArray(Arc::new(BaseValue { val: default, coords })), coords,
+        }), coords }
+    };
+    Ok(AstNode { statement: AstStatement::Init { typ, val, expr }, coords })
+}
+
 fn build_ast_from_if(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstNode, Error> {
     let mut iter = command.into_iter();
     return Ok(AstNode{statement: AstStatement::If { 
@@ -501,8 +546,12 @@ fn build_ast_from_if(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstN
         block: self.build_ast_from_block(iter.next().unwrap().into_inner().into_iter().next().unwrap().into_inner())?,
         else_block: { 
             if let Some(rule) = iter.next() {
-                let block = self.build_ast_from_block(rule.into_inner().into_iter().next().unwrap().into_inner())?;
-                    Some(block)
+                if rule.as_rule() == Rule::if_statement {
+                    let nested_coords = coords!(rule);
+                    Some(AstBlock { nodes: vec![self.build_ast_from_if(rule.into_inner(), nested_coords)?], coords: nested_coords })
+                } else {
+                    Some(self.build_ast_from_block(rule.into_inner().next().unwrap().into_inner())?)
+                }
             } else { 
                 None 
             }
@@ -513,7 +562,15 @@ fn build_ast_from_if(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstN
 fn build_ast_from_for(&self, command: Pairs<Rule>, coords: Coords) -> Result<AstNode, Error> {
     let mut iter = command.into_iter();
     let name = iter.next().unwrap();
-    let mut range = iter.next().unwrap().into_inner().into_iter();
+    let iterable = iter.next().unwrap();
+    if iterable.as_rule() == Rule::expression {
+        return Ok(AstNode { statement: AstStatement::ForEach {
+            val: self.build_ast_from_ident(name)?,
+            iterable: self.build_ast_from_expression(iterable)?,
+            block: self.build_ast_from_block(iter.next().unwrap().into_inner().next().unwrap().into_inner())?,
+        }, coords });
+    }
+    let mut range = iterable.into_inner();
     Ok(AstNode{statement: AstStatement::For { 
         val:  self.build_ast_from_ident(name).unwrap(), 
         from: self.build_ast_from_expression(range.next().unwrap())?, 
@@ -588,6 +645,7 @@ fn build_ast_from_simple_value(&self, val: Pair<Rule>) -> Result<SimpleValue, Er
     match val.as_rule() {
         Rule::integer => Ok(SimpleValue{val:SimpleValueType::Int(val.as_str().parse::<i32>().unwrap()), coords: coords}),
         Rule::noun   => Ok(SimpleValue{val:SimpleValueType::Id(self.build_ast_from_noun(val)?), coords: coords}),
+        Rule::function_call => Ok(SimpleValue { val: SimpleValueType::FunctionCall(self.build_ast_from_value(val)?), coords }),
         _ => return Err(Error::parse(String::from("Expected a simple value!"), coords!(val)))
     }
 }

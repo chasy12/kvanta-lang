@@ -18,7 +18,7 @@
 statement {
   Function | GlobalBlock | VariableDeclaration | Assignment |
   FunctionCall ";"? | IfExpression | ForExpression | WhileExpression |
-  ReturnExpression
+  ReturnExpression | BreakExpression | ContinueExpression
 }
 
 GlobalBlock { Global Block }
@@ -28,19 +28,22 @@ Function { Func FuncName "(" Args? ")" ("->" TypeName)? Block }
 FunctionCall { FuncName "(" Params? ")" }
 FuncName { Name | Type }
 Args { Arg ("," Arg)* }
-Arg { TypeName Name }
+Arg { TypeName Name ArrayDimension* }
 
-VariableDeclaration { TypeName Name "=" expression ";" }
+VariableDeclaration { TypeName Name ArrayDimension* ("=" expression)? ";" }
+ArrayDimension { "[" Number "]" }
 Assignment { Variable "=" expression ";" }
 Variable { Name Index* }
 Index { "[" expression "]" }
 
 IfExpression { If "(" expression ")" Block ElseExpression? }
-ElseExpression { Else Block }
-ForExpression { For Name In Range Block }
+ElseExpression { Else (Block | IfExpression) }
+ForExpression { For Name In (Range | expression) Block }
 Range { "(" expression ".." expression ")" }
 WhileExpression { While "(" expression ")" Block }
 ReturnExpression { Return expression ";" }
+BreakExpression { Break ";" }
+ContinueExpression { Continue ";" }
 Block { "{" statement* "}" }
 
 Params { (NamedArgument | expression) ("," (NamedArgument | expression))* }
@@ -76,6 +79,8 @@ For { @specialize[@name=For]<Name, "for"> }
 While { @specialize[@name=While]<Name, "while"> }
 Else { @specialize[@name=Else]<Name, "else"> }
 Return { @specialize[@name=Return]<Name, "return"> }
+Break { @specialize[@name=Break]<Name, "break"> }
+Continue { @specialize[@name=Continue]<Name, "continue"> }
 Global { @specialize[@name=Global]<Name, "global"> }
 Const { @specialize[@name=Const]<Name, "const"> }
 Array { @specialize[@name=Array]<Name, "array"> }

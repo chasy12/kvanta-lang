@@ -139,11 +139,23 @@ export const QuantaLanguage = LRLanguage.define({
 })
 
 export const rawCompletionItems = [
+  {label: "if", type: "keyword"},
+  {label: "else", type: "keyword", info: 'else if (condition) { ... } or else { ... }'},
+  {label: "for", type: "keyword", info: 'for value in values { ... } or for i in (0..10) { ... }'},
+  {label: "in", type: "keyword"},
+  {label: "while", type: "keyword"},
+  {label: "break", type: "keyword", info: 'break; exits the innermost loop'},
+  {label: "continue", type: "keyword", info: 'continue; starts the next iteration of the innermost loop'},
+  {label: "return", type: "keyword"},
+  {label: "func", type: "keyword"},
+  {label: "global", type: "keyword"},
+  {label: "array", type: "keyword", info: 'array<int, 2> values = {1, 2}; or int values[2];'},
   {label: "bool", type: "keyword"},
   {label: "int", type: "keyword"},
   {label: "float", type: "keyword"},
   {label: "string", type: "keyword", info: 'Declare a string variable, or use string(value) to convert a value to text.'},
   {label: "color", type: "keyword"},
+  {label: "len", type: "function", info: 'len(array) returns the number of outer elements as an int'},
   {label: "Color", type: "keyword"},
   {label: "Red", type: "keyword"},
   {label: "DarkRed", type: "keyword"},

@@ -95,6 +95,14 @@ pub struct Execution {
     pub expanded_arrays: Arc<Mutex<LinkedList<Expression>>>
 }
 
+#[derive(Debug)]
+pub enum ControlFlow {
+    Next,
+    Return(BaseValue),
+    Break,
+    Continue,
+}
+
 pub fn pack_color(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from_be_bytes([r, g, b, a])
 }
@@ -333,7 +341,6 @@ impl Execution {
     }
 
     /// Calls a builtin or user function with already evaluated arguments.
-    /// Calls a builtin or user function with already evaluated arguments.
     async fn call_function(&self, function_name: &str, vals: Vec<BaseValue>, coords: Coords) -> Result<Option<BaseValue>, Error>{
         if let Some((_, option)) = SETTERS.iter().find(|(setter, _)| *setter == function_name) {
             let value = vals.first().ok_or_else(|| Error::runtime(format!("{} expects one argument", function_name), coords))?;
@@ -503,6 +510,15 @@ impl Execution {
                 }
                 Ok(Some(int(random_value, coords)))
             },
+            "len" => {
+                if vals.len() != 1 {
+                    return Err(Error::runtime(format!("len expects 1 argument, got {}", vals.len()), coords));
+                }
+                match &vals[0].val {
+                    BaseValueType::Array(values) => Ok(Some(int(values.len() as i32, coords))),
+                    _ => Err(Error::runtime("len expects an array argument".into(), coords)),
+                }
+            },
             "string" => {
                 if vals.len() != 1 {
                     return Err(Error::runtime(format!("string expects 1 argument, got {}", vals.len()), coords));
@@ -534,12 +550,11 @@ impl Execution {
                             scope.variables.insert(param.0.clone(), val);
                         }
                     }
-                    let ret_val_wrap = new_exec.execute_commands(&body.nodes).await?;
-
-                    if let Some(return_value) = ret_val_wrap {
-                        return Ok(Some(return_value));
-                    }
-                    return Ok(None);
+                    return match new_exec.execute_commands(&body.nodes).await? {
+                        ControlFlow::Return(value) => Ok(Some(value)),
+                        ControlFlow::Next => Ok(None),
+                        ControlFlow::Break | ControlFlow::Continue => Err(Error::runtime("Loop control cannot leave a function".into(), coords)),
+                    };
                 }
                 Err(Error::runtime(format!("Unknown function: {}", function_name), coords))
             }
@@ -586,41 +601,20 @@ impl Execution {
     }
 
     pub async fn execute_key(&mut self, key: i32) -> Result<(), Error> {
-        let lines = Arc::clone(&self.lines);
-        match &*lines {
-            AstProgram::Block(_) => { Ok(())},
-            AstProgram::Forest(funcs) => {
-                for func in &funcs.0 {
-                    if func.name == "keyboard" {
-                        let mut new_exec = self.create_subscope();
-                        new_exec.define(&func.args[0].0, int(key, func.header), func.header)?;
-                        new_exec.execute_commands(&func.block.nodes).await?;
-                    }
-                }
-                Ok(())
-            },
+        if self.functions.contains_key("keyboard") {
+            self.call_function("keyboard", vec![int(key, (0,0,0,0))], (0,0,0,0)).await?;
         }
+        Ok(())
     }
 
-    pub async fn execute_mouse(&mut self, x: i32, y:i32) -> Result<(), Error> {
-        let lines = Arc::clone(&self.lines);
-        match &*lines {
-            AstProgram::Block(_) => { Ok(())},
-            AstProgram::Forest(funcs) => {
-                for func in &funcs.0 {
-                    if func.name == "mouse" {
-                        let mut new_exec = self.create_subscope();
-                        new_exec.define(&func.args[0].0, int(x, func.header), func.header)?;
-                        new_exec.define(&func.args[1].0, int(y, func.header), func.header)?;
-                        new_exec.execute_commands(&func.block.nodes).await?;
-                    }
-                }
-                Ok(())
-            },
+    pub async fn execute_mouse(&mut self, x: i32, y: i32) -> Result<(), Error> {
+        if self.functions.contains_key("mouse") {
+            self.call_function("mouse", vec![int(x, (0,0,0,0)), int(y, (0,0,0,0))], (0,0,0,0)).await?;
         }
+        Ok(())
     }
 
-    pub fn execute_commands<'a>(&'a mut self, nodes : &'a [AstNode]) -> Pin<Box<dyn Future<Output = Result<Option<BaseValue>, Error>> + 'a>> {
+    pub fn execute_commands<'a>(&'a mut self, nodes: &'a [AstNode]) -> Pin<Box<dyn Future<Output = Result<ControlFlow, Error>> + 'a>> {
         Box::pin(async move {
             self.scheduler.maybe_yield(&self.canvas).await?;
             for line in nodes {
@@ -633,83 +627,82 @@ impl Execution {
                             self.call_function(name, vals, line.coords).await?;
                         }
                     },
-                    AstStatement::Init { typ : _, val, expr } => {
-                        self.execute_init(val, expr, line.coords).await?;
-                    }
-                    AstStatement::SetVal { val, expr } => {
-                        self.execute_set(val, expr, line.coords).await?;
-                    }
-                    
+                    AstStatement::Init { val, expr, .. } => self.execute_init(val, expr, line.coords).await?,
+                    AstStatement::SetVal { val, expr } => self.execute_set(val, expr, line.coords).await?,
                     AstStatement::If { clause, block, else_block } => {
-                        if let BaseValueType::Bool(val) = self.calculate_expression(clause).await?.val {
-                            let mut new_exec = self.create_subscope();
-                            if val {
-                                if let Some(return_value) = new_exec.execute_commands(&block.nodes).await? {
-                                    return Ok(Some(return_value));
-                                }
-                            } else if let Some(else_block) = else_block {
-                                if let Some(return_value) = new_exec.execute_commands(&else_block.nodes).await? {
-                                    return Ok(Some(return_value));
-                                }
-                            }
-                        } else {
-                            return Err(Error::runtime(String::from("If clause must be a boolean expression"), line.coords));
+                        let condition = match self.calculate_expression(clause).await?.val {
+                            BaseValueType::Bool(value) => value,
+                            _ => return Err(Error::runtime("If clause must be a boolean expression".into(), line.coords)),
+                        };
+                        let selected = if condition { Some(block) } else { else_block.as_ref() };
+                        if let Some(block) = selected {
+                            let flow = self.create_subscope().execute_commands(&block.nodes).await?;
+                            if !matches!(flow, ControlFlow::Next) { return Ok(flow); }
                         }
                     },
                     AstStatement::While { clause, block } => {
                         loop {
-                            match self.calculate_expression(clause).await?.val {
-                                BaseValueType::Bool(while_clause) => {
-                                    if while_clause {
-                                        let mut new_exec = self.create_subscope();
-                                        let result = new_exec.execute_commands(&block.nodes).await?;
-                                        if let Some(return_value) = result {
-                                            return Ok(Some(return_value));
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                },
-                                v => return Err(Error::runtime(format!("Expected bool value but got: {:?}", v), line.coords))
+                            let condition = match self.calculate_expression(clause).await?.val {
+                                BaseValueType::Bool(value) => value,
+                                _ => return Err(Error::runtime("While clause must be a boolean expression".into(), line.coords)),
+                            };
+                            if !condition { break; }
+                            match self.create_subscope().execute_commands(&block.nodes).await? {
+                                ControlFlow::Break => break,
+                                ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                                ControlFlow::Next | ControlFlow::Continue => {},
                             }
                         }
                     },
                     AstStatement::For { val, from, to, block } => {
-                        if let BaseValueType::Int(f) = self.calculate_expression(from).await?.val {
-                            if let BaseValueType::Int(t) = self.calculate_expression(to).await?.val {
-                                if f <= t {
-                                    for cycle in f..=t {
-                                    if let Some(return_value) = self.execute_for(val, cycle, block, line.coords).await?{
-                                        return Ok(Some(return_value));
-                                    }
-                                }                  
-                                } else {
-                                    for cycle in (t..=f).rev() {
-                                        if let Some(return_value) = self.execute_for(val, cycle, block, line.coords).await?{
-                                            return Ok(Some(return_value));
-                                        }
-                                    }
-                                }                 
+                        let first = match self.calculate_expression(from).await?.val {
+                            BaseValueType::Int(value) => value,
+                            _ => return Err(Error::runtime("For loop range must use integers".into(), line.coords)),
+                        };
+                        let last = match self.calculate_expression(to).await?.val {
+                            BaseValueType::Int(value) => value,
+                            _ => return Err(Error::runtime("For loop range must use integers".into(), line.coords)),
+                        };
+                        let mut index = first;
+                        loop {
+                            match self.execute_iteration(val, int(index, line.coords), block, line.coords).await? {
+                                ControlFlow::Break => break,
+                                ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                                ControlFlow::Next | ControlFlow::Continue => {},
+                            }
+                            // Test the endpoint before incrementing to avoid overflowing i32.
+                            if index == last { break; }
+                            index += if first <= last { 1 } else { -1 };
+                        }
+                    },
+                    AstStatement::ForEach { val, iterable, block } => {
+                        let elements = match self.calculate_expression(iterable).await?.val {
+                            BaseValueType::Array(values) => values,
+                            _ => return Err(Error::runtime("For loop elements must come from an array".into(), line.coords)),
+                        };
+                        // Evaluate once. Each binding owns its element from this snapshot.
+                        for element in elements {
+                            match self.execute_iteration(val, element, block, line.coords).await? {
+                                ControlFlow::Break => break,
+                                ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                                ControlFlow::Next | ControlFlow::Continue => {},
                             }
                         }
                     },
-                    AstStatement::Return { expr } => {
-                        let val = self.calculate_expression(expr).await?;
-                        return Ok(Some(val))
-                    },
+                    AstStatement::Break => return Ok(ControlFlow::Break),
+                    AstStatement::Continue => return Ok(ControlFlow::Continue),
+                    AstStatement::Return { expr } => return Ok(ControlFlow::Return(self.calculate_expression(expr).await?)),
                 }
             }
-            Ok(None)
+            Ok(ControlFlow::Next)
         })
     }
 
-    async fn execute_for(&mut self, val: &str, cycle : i32, block : &AstBlock, coords: Coords) -> Result<Option<BaseValue>, Error> {
-        let mut new_exec = self.create_subscope();
-        new_exec.define(val, int(cycle, coords), coords)?;
-        new_exec.execute_commands(&block.nodes).await
+    async fn execute_iteration(&mut self, name: &str, value: BaseValue, block: &AstBlock, coords: Coords) -> Result<ControlFlow, Error> {
+        let mut sub = self.create_subscope();
+        sub.define(name, value, coords)?;
+        sub.execute_commands(&block.nodes).await
     }
-
-
 
     pub fn calculate_expression<'a>(
         &'a self,
@@ -865,6 +858,3 @@ fn compare_bools(a: bool, b : bool, op: Operator, coords: Coords) -> Result<Base
         o => Err(Error::runtime(format!("Cannot apply operator '{:?}' to values of type bool!", o), coords))
     }
 }
-
-
-

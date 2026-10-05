@@ -31,6 +31,7 @@ pub struct Program {
     pub function_defs : HashMap<String, (Vec<(String, Type)>, Option<Type>)>,
     pub functions : HashMap<String, (Vec<(String, Type)>, Option<Type>, AstBlock)>,
     pub expanded_arrays : LinkedList<Expression>,
+    loop_depth: usize,
     keywords: HashSet<String>
 }
 
@@ -70,6 +71,7 @@ pub fn create_program(ast: AstProgram) -> Program {
     let mut program = Program {lines: ast, scope: Scope { variables: HashMap::new(), outer_scope: Box::new(None) },
     global_vars: HashMap::new(),
     expanded_arrays: LinkedList::new(),
+    loop_depth: 0,
     functions: HashMap::new(), function_defs: HashMap::from([
         (String::from("circle"), (vec![
             (String::from("x"), int_type()),
@@ -145,7 +147,7 @@ pub fn create_program(ast: AstProgram) -> Program {
     ]), keywords: HashSet::from(["circle", "line", "rectangle", 
                     "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "setFps", "clear", "rgb",
                     "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output",
-                    "for", "while", "global", "func", "if", "else",
+                    "for", "while", "global", "func", "if", "else", "break", "continue", "len",
                     "int", "bool", "color", "float", "string", "array", "Color", "true", "false"
     ].map(|x| String::from(x)))};
     program.function_defs.insert("text".into(), (vec![
@@ -191,6 +193,7 @@ impl Program {
             functions: self.functions.clone(),
             function_defs: self.function_defs.clone(),
             expanded_arrays: self.expanded_arrays.clone(),
+            loop_depth: self.loop_depth,
             keywords: self.keywords.clone()
         }
     }
@@ -198,6 +201,7 @@ impl Program {
     pub fn type_check(&mut self) -> Result<ReturnType, Error> {
         match self.lines {
             AstProgram::Block(ref block) => {
+                Self::validate_loop_control(block, self.loop_depth)?;
                 let (return_type, new_block) = self.type_check_block(block.clone())?;
                 self.lines = quanta_parser::ast::AstProgram::Block(new_block);
                 return Ok(return_type);
@@ -285,6 +289,7 @@ impl Program {
 
     pub fn type_check_function(&mut self, func: AstFunction) -> Result<AstProgram, Error> {
         let mut func_prog = self.create_subprogram(Some(func.block));
+        func_prog.loop_depth = 0;
         match func_prog.type_check() {
             Ok(ReturnType::Full(t)) => {
                 if let Some(return_type) = &func.return_type {
@@ -317,11 +322,31 @@ impl Program {
         }
     }
 
-    pub fn type_check_block(&mut self, block : AstBlock) -> Result<(ReturnType, AstBlock), Error> {
+    fn validate_loop_control(block: &AstBlock, depth: usize) -> Result<(), Error> {
+        for node in &block.nodes {
+            match &node.statement {
+                AstStatement::Break | AstStatement::Continue if depth == 0 => {
+                    let keyword = if matches!(node.statement, AstStatement::Break) { "break" } else { "continue" };
+                    return Err(Error::logic(format!("{} can only be used inside a loop", keyword), node.coords));
+                },
+                AstStatement::If { block, else_block, .. } => {
+                    Self::validate_loop_control(block, depth)?;
+                    if let Some(block) = else_block { Self::validate_loop_control(block, depth)?; }
+                },
+                AstStatement::For { block, .. } | AstStatement::ForEach { block, .. } | AstStatement::While { block, .. } => {
+                    Self::validate_loop_control(block, depth + 1)?;
+                },
+                _ => {},
+            }
+        }
+        Ok(())
+    }
+
+    pub fn type_check_block(&mut self, block: AstBlock) -> Result<(ReturnType, AstBlock), Error> {
         let mut return_type: Option<Type> = None;
-        let mut new_block : AstBlock = AstBlock{ nodes: vec![], coords: block.coords };
+        let mut new_block = AstBlock { nodes: vec![], coords: block.coords };
         for line in block.nodes {
-            match &line.statement {
+            let (statement, flow) = match &line.statement {
                 AstStatement::Command { name, args, named_args } => {
                     if let Some(err) = self.clone().type_check_command(name.clone(), args.clone(), line.coords) {
                         return Err(err);
@@ -341,126 +366,65 @@ impl Program {
                             return Err(Error::type_er(format!("Text option '{}' expects '{}', got '{}'", option, expected.to_string(), actual), expr.coords));
                         }
                     }
+                    (line.statement.clone(), ReturnType::None)
                 },
                 AstStatement::Init { typ, val, expr } => {
-                    if self.keywords.contains(val) {
-                        return Err(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", &val), line.coords));
-                    }
-                    match self.clone().type_check_init(typ.clone(), val.clone(), expr.clone(), line.coords) {
-                        Err(err) => return Err(err),
-                        Ok((new_type, new_expr)) => {
-                            self.scope.variables.insert(val.clone().trim().to_string(), (new_type.clone(), new_expr.clone()));
-                            println!("Got new value for that array: {:?}", new_expr);
-                            new_block.nodes.push(AstNode { statement: AstStatement::Init { typ: new_type.clone(), val: val.clone().trim().to_string(), expr: new_expr }, coords: line.coords });
-                            continue;
-                        }
-                    }
+                    let (typ, expr) = self.type_check_init(typ.clone(), val.clone(), expr.clone(), line.coords)?;
+                    self.scope.variables.insert(val.clone(), (typ.clone(), expr.clone()));
+                    (AstStatement::Init { typ, val: val.clone(), expr }, ReturnType::None)
                 },
                 AstStatement::SetVal { val, expr } => {
-                    match self.clone().type_check_set_val(val.clone(), expr.clone(), line.coords) {
-                        Err(err) => return Err(err),
-                        Ok((var_type, expr)) => {
-                            if self.global_vars.contains_key(val.clone().to_string().as_str()) {
-                                self.global_vars.insert(val.clone().to_string(), (var_type, expr));
-                            } else {
-                                self.scope.variables.insert(val.to_string(), (var_type, expr));
-                            }
-
-                        }
-                    }
+                    self.type_check_set_val(val.clone(), expr.clone(), line.coords)?;
+                    // Assignment does not change the declared type or create a new binding.
+                    (line.statement.clone(), ReturnType::None)
                 },
                 AstStatement::If { clause, block, else_block } => {
-                    let if_prog = self.create_subprogram(None);
-                    match if_prog.type_check_if(clause.clone(), block.clone(), else_block.clone())? {   
-                        ReturnType::None => {},
-                        ReturnType::Partial(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("If block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            } else {
-                                return_type = Some(t);
-                            }
-                        },
-                        ReturnType::Full(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("If block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            }
-                            new_block.nodes.push(line);
-                            return Ok((ReturnType::Full(t), new_block));
-                        }
-                    }
+                    let (flow, block, else_block) = self.type_check_if(clause.clone(), block.clone(), else_block.clone())?;
+                    (AstStatement::If { clause: clause.clone(), block, else_block }, flow)
                 },
                 AstStatement::For { val, from, to, block } => {
-                    match self.create_subprogram(None).type_check_for(val.clone(), from.clone(), to.clone(), block.clone(), line.coords)? {
-                        ReturnType::None => {},
-                        ReturnType::Partial(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("For block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            } else {
-                                return_type = Some(t);
-                            }
-                        },
-                        ReturnType::Full(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("For block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            }
-                            new_block.nodes.push(line);
-                            return Ok((ReturnType::Full(t), new_block));
-                        }
-                    }
+                    let (flow, block) = self.type_check_for(val.clone(), from.clone(), to.clone(), block.clone(), line.coords)?;
+                    (AstStatement::For { val: val.clone(), from: from.clone(), to: to.clone(), block }, flow)
+                },
+                AstStatement::ForEach { val, iterable, block } => {
+                    let (flow, block) = self.type_check_foreach(val, iterable, block.clone(), line.coords)?;
+                    (AstStatement::ForEach { val: val.clone(), iterable: iterable.clone(), block }, flow)
                 },
                 AstStatement::While { clause, block } => {
-                    match self.create_subprogram(None).type_check_while(clause.clone(), block.clone())? {
-                        ReturnType::None => {},
-                        ReturnType::Partial(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("For block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            } else {
-                                return_type = Some(t);
-                            }
-                        },
-                        ReturnType::Full(t) => {
-                            if let Some(rt) = &return_type {
-                                if *rt != t {
-                                    return Err(Error::logic(format!("For block return type mismatch: expected '{}', got '{}'", rt, t), line.coords));
-                                }
-                            }
-                            new_block.nodes.push(line);
-                            return Ok((ReturnType::Full(t), new_block));
-                        }
+                    let (flow, block) = self.type_check_while(clause.clone(), block.clone())?;
+                    (AstStatement::While { clause: clause.clone(), block }, flow)
+                },
+                AstStatement::Break | AstStatement::Continue => {
+                    if self.loop_depth == 0 {
+                        let keyword = if matches!(line.statement, AstStatement::Break) { "break" } else { "continue" };
+                        return Err(Error::logic(format!("{} can only be used inside a loop", keyword), line.coords));
+                    }
+                    (line.statement.clone(), ReturnType::None)
+                },
+                AstStatement::Return { expr } => {
+                    (line.statement.clone(), ReturnType::Full(self.type_check_expr(expr)?))
+                },
+            };
+            if let Some(t) = flow.t() {
+                if let Some(previous) = &return_type {
+                    if previous != t {
+                        return Err(Error::logic(format!("Return type mismatch: expected '{}', got '{}'", previous, t), line.coords));
                     }
                 }
-                AstStatement::Return { expr } => {
-                    let expr_type = self.create_subprogram(None).type_check_expr(&expr)?;
-                    if let Some(rt) = &return_type {
-                        if *rt != expr_type {
-                            return Err(Error::logic(format!("Return type mismatch: expected '{}', got '{}'", rt, expr_type), line.coords));
-                        }
-                    }
-                    new_block.nodes.push(line);
-                    return Ok((ReturnType::Full(expr_type), new_block))
-                },
+                return_type = Some(t.clone());
             }
-            new_block.nodes.push(line);
+            new_block.nodes.push(AstNode { statement, coords: line.coords });
+            if let ReturnType::Full(t) = flow {
+                return Ok((ReturnType::Full(t), new_block));
+            }
         }
-        if let Some(rt) = &return_type {
-            Ok((ReturnType::Partial(rt.clone()), new_block))
-        } else {
-            Ok((ReturnType::None, new_block))
-        }
+        Ok((return_type.map(ReturnType::Partial).unwrap_or(ReturnType::None), new_block))
     }
 
-
     fn type_check_command(&self, name : String, args : Vec<Expression>, coords: Coords) -> Option<Error> {
+        if name == "len" {
+            return self.type_check_length(&args, coords).err();
+        }
         if name == "string" {
             return self.type_check_string_conversion(&args, coords).err();
         }
@@ -566,67 +530,114 @@ impl Program {
         }
     }
 
-    fn type_check_if(&self, clause : Expression, block : AstBlock, else_block : Option<AstBlock>) -> Result<ReturnType, Error> {
-        let clause_type = self.clone().type_check_expr(&clause)?;
-             
-        if clause_type.type_name != Primitive(Bool) {
-            return Err(Error::logic(format!("If clause must be a bool expression"), clause.coords));
+    fn type_check_if(&self, clause: Expression, block: AstBlock, else_block: Option<AstBlock>) -> Result<(ReturnType, AstBlock, Option<AstBlock>), Error> {
+        if self.type_check_expr(&clause)?.type_name != Primitive(Bool) {
+            return Err(Error::logic("If clause must be a bool expression".into(), clause.coords));
         }
-
-        let (l1, r1, _, _) = block.coords;
-
-        let mut if_prog = self.create_subprogram(Some(block));
-        let if_type = if_prog.type_check()?;
-
-        if matches!(else_block, None) {
-            if let ReturnType::Full(t) = if_type {
-                return Ok(ReturnType::Partial(t));
-            }
-            return Ok(if_type);
-        }
-
-        let else_block = else_block.unwrap();
-        let (_, _, l2, r2) = else_block.coords;
-
-        let mut else_prog = self.create_subprogram(Some(else_block));
-        let else_type = else_prog.type_check()?;
-
-        if let (Some(t1), Some(t2)) = (if_type.t(), else_type.t()) {
+        let (if_flow, block) = self.create_subprogram(None).type_check_block(block)?;
+        let (else_flow, else_block) = if let Some(else_block) = else_block {
+            let (flow, checked) = self.create_subprogram(None).type_check_block(else_block)?;
+            (flow, Some(checked))
+        } else {
+            (ReturnType::None, None)
+        };
+        if let (Some(t1), Some(t2)) = (if_flow.t(), else_flow.t()) {
             if t1 != t2 {
-                return Err(Error::logic(format!("Return type of if and else block must match: '{}' != '{}'", t1, t2), (l1, r1, l2, r2)));
+                return Err(Error::logic(format!("Return type of if and else block must match: '{}' != '{}'", t1, t2), clause.coords));
             }
         }
-
-        if if_type == else_type {
-            return Ok(if_type);
-        }
-
-        return Ok(ReturnType::Partial(if_type.t().unwrap().clone()));
-        
+        let flow = match (&if_flow, &else_flow) {
+            (ReturnType::Full(t), ReturnType::Full(_)) => ReturnType::Full(t.clone()),
+            _ => if_flow.t().or(else_flow.t()).cloned().map(ReturnType::Partial).unwrap_or(ReturnType::None),
+        };
+        Ok((flow, block, else_block))
     }
 
-    fn type_check_for(&self, val : String, from : Expression, to : Expression, block : AstBlock, _: Coords) -> Result<ReturnType, Error> {
-        let f = self.clone().type_check_expr(&from)?;
-        let t = self.clone().type_check_expr(&to)?;
-        if f.type_name != Primitive(Int) {
-            return Err(Error::logic(format!("For loop range can only be integer values"), from.coords))  
+    fn check_loop_variable(&self, name: &str, coords: Coords) -> Result<(), Error> {
+        if self.keywords.contains(name) {
+            return Err(Error::type_er(format!("'{}' is a keyword, it cannot be a loop variable", name), coords));
         }
-        if t.type_name != Primitive(Int) {
-            return Err(Error::logic(format!("For loop range can only be integer values"), to.coords))  
+        if self.contains_key(name) {
+            return Err(Error::logic(format!("Variable {} is re-defined!", name), coords));
         }
-        let mut for_prog = self.create_subprogram(Some(block));
-        for_prog.scope.variables.insert(val, (Type{type_name:Primitive(Int), is_const:false}, from));
-        for_prog.type_check()
+        Ok(())
     }
 
-    fn type_check_while(&self, clause : Expression, block : AstBlock) -> Result<ReturnType, Error> {
-        let clause_type = self.clone().type_check_expr(&clause)?;
-        if clause_type.type_name != Primitive(Bool) {
-            return Err(Error::logic(format!("While clause must be a bool expression"), clause.coords));
+    fn check_loop_block(&mut self, block: AstBlock, guaranteed_iteration: bool) -> Result<(ReturnType, AstBlock), Error> {
+        self.loop_depth += 1;
+        let (flow, block) = self.type_check_block(block)?;
+        // Inclusive ranges and nonempty arrays always run their first iteration.
+        // A break or continue can still bypass an otherwise definite return.
+        let flow = if guaranteed_iteration && !Self::exits_current_loop(&block) {
+            flow
+        } else {
+            flow.t().cloned().map(ReturnType::Partial).unwrap_or(ReturnType::None)
+        };
+        Ok((flow, block))
+    }
+
+    fn exits_current_loop(block: &AstBlock) -> bool {
+        block.nodes.iter().any(|node| match &node.statement {
+            AstStatement::Break | AstStatement::Continue => true,
+            AstStatement::If { block, else_block, .. } => {
+                Self::exits_current_loop(block) || else_block.as_ref().map(Self::exits_current_loop).unwrap_or(false)
+            },
+            // Nested loops consume their own break and continue statements.
+            _ => false,
+        })
+    }
+
+    fn type_check_for(&self, val: String, from: Expression, to: Expression, block: AstBlock, coords: Coords) -> Result<(ReturnType, AstBlock), Error> {
+        self.check_loop_variable(&val, coords)?;
+        if self.type_check_expr(&from)?.type_name != Primitive(Int) {
+            return Err(Error::logic("For loop range can only be integer values".into(), from.coords));
         }
-        let mut while_prog = self.clone();
-        while_prog.lines = AstProgram::Block(block);
-        while_prog.type_check()
+        if self.type_check_expr(&to)?.type_name != Primitive(Int) {
+            return Err(Error::logic("For loop range can only be integer values".into(), to.coords));
+        }
+        let mut sub = self.create_subprogram(None);
+        sub.scope.variables.insert(val, (Type::typ(Int), from));
+        sub.check_loop_block(block, true)
+    }
+
+    fn mutable_copy_type(mut typ: Type) -> Type {
+        typ.is_const = false;
+        if let Array(inner, _) = &mut typ.type_name {
+            if let Some(element) = inner.as_mut() {
+                *element = Self::mutable_copy_type(element.clone());
+            }
+        }
+        typ
+    }
+
+    fn type_check_foreach(&self, val: &str, iterable: &Expression, block: AstBlock, coords: Coords) -> Result<(ReturnType, AstBlock), Error> {
+        self.check_loop_variable(val, coords)?;
+        let iterable_type = self.type_check_expr(iterable)?;
+        let (element_type, size) = match iterable_type.type_name {
+            Array(inner, size) => (inner.as_ref().clone().unwrap_or(Type::typ(Int)), size),
+            _ => return Err(Error::type_er("For loop elements must come from an array".into(), iterable.coords)),
+        };
+        let mut sub = self.create_subprogram(None);
+        sub.scope.variables.insert(val.to_string(), (Self::mutable_copy_type(element_type), iterable.clone()));
+        sub.check_loop_block(block, size > 0)
+    }
+
+    fn type_check_while(&self, clause: Expression, block: AstBlock) -> Result<(ReturnType, AstBlock), Error> {
+        if self.type_check_expr(&clause)?.type_name != Primitive(Bool) {
+            return Err(Error::logic("While clause must be a bool expression".into(), clause.coords));
+        }
+        let guaranteed_iteration = matches!(&clause.expr_type, ExpressionType::Value(BaseValue { val: BaseValueType::Bool(true), .. }));
+        self.create_subprogram(None).check_loop_block(block, guaranteed_iteration)
+    }
+
+    fn type_check_length(&self, args: &[Expression], coords: Coords) -> Result<Type, Error> {
+        if args.len() != 1 {
+            return Err(Error::type_er(format!("len expects 1 argument, got {}", args.len()), coords));
+        }
+        if !matches!(self.type_check_expr(&args[0])?.type_name, Array(_, _)) {
+            return Err(Error::type_er("len expects an array argument".into(), args[0].coords));
+        }
+        Ok(Type::typ(Int))
     }
 
     fn check_display_type(typ: &Type, coords: Coords) -> Result<(), Error> {
@@ -731,6 +742,14 @@ impl Program {
     }
 
     fn type_check_var(&self, var: &VariableCall, coords: Coords) -> Result<Type, Error> {
+        if let VariableCall::ArrayCall(_, indices) = var {
+            for index in indices {
+                let expression = index.clone().to_expr();
+                if self.type_check_expr(&expression)?.type_name != Primitive(Int) {
+                    return Err(Error::type_er("Array indices must be integers".into(), expression.coords));
+                }
+            }
+        }
         let (name, depth) = match var {
             VariableCall::Name(name) => (name, 0),
             VariableCall::ArrayCall(name, inds) => (name, inds.len())
@@ -776,6 +795,9 @@ impl Program {
             },
             BaseValueType::ExpandingArray(val) => Ok(Type{type_name:ExpandingArray(Arc::new(self.type_check_baseval(&val.clone())?), val.clone()), is_const: false}),
             BaseValueType::FunctionCall(name,arg_list, return_type ) => {
+                if name == "len" {
+                    return self.type_check_length(arg_list, base.coords);
+                }
                 if name == "string" {
                     return self.type_check_string_conversion(arg_list, base.coords);
                 }
@@ -800,4 +822,3 @@ impl Program {
     }
 
 }
-

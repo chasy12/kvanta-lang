@@ -2,6 +2,8 @@ mod utils;
 mod compiler;
 mod program;
 mod execution;
+#[cfg(test)]
+mod control_flow_tests;
 //mod tests;
 mod runtime;
 //mod linear_execution;

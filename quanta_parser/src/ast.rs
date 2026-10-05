@@ -27,7 +27,7 @@ impl BaseType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VariableCall {
     Name(String),
     ArrayCall(String, Vec<SimpleExpression>)
@@ -66,17 +66,19 @@ impl fmt::Display for SimpleValue {
         match &self.val {
             SimpleValueType::Id(var) => write!(f, "{}", var),
             SimpleValueType::Int(value) => write!(f, "{}", value),
+            SimpleValueType::FunctionCall(value) => write!(f, "{}", value.val.to_string()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SimpleValueType {
     Id(VariableCall),
-    Int(i32)
+    Int(i32),
+    FunctionCall(BaseValue),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimpleValue {
     val: SimpleValueType,
     coords: (usize, usize, usize, usize)
@@ -104,7 +106,6 @@ impl BaseValueType {
             _ => self.to_string(),
         }
     }
-
 
     pub fn to_string(&self) -> String {
         match self {
@@ -303,14 +304,14 @@ pub fn goes_before(op1 : Operator,  op2: Operator) -> bool {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SimpleExpressionType {
     Value(SimpleValue),
     Unary(UnaryOperator, Box<SimpleExpression>),
     Binary(Operator, Box<SimpleExpression>, Box<SimpleExpression>)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimpleExpression {
     expr: SimpleExpressionType,
     coords: (usize, usize, usize, usize)
@@ -323,6 +324,7 @@ impl SimpleExpression {
                 Expression{expr_type: ExpressionType::Value(match value.val {
                     SimpleValueType::Id(var) => BaseValue{val: BaseValueType::Id(var), coords: value.coords},
                     SimpleValueType::Int(i) => BaseValue{val: BaseValueType::Int(i), coords: value.coords},
+                    SimpleValueType::FunctionCall(function) => function,
                 }), coords: self.coords}
             }
             SimpleExpressionType::Unary(op, expr) => 
@@ -355,9 +357,12 @@ pub enum AstStatement {
     Init    { typ: Type, val : String, expr: Expression },
     SetVal { val: VariableCall, expr: Expression },
     For     { val: String, from: Expression, to: Expression, block: AstBlock },
+    ForEach { val: String, iterable: Expression, block: AstBlock },
     While   { clause: Expression, block: AstBlock},
     If      { clause: Expression, block: AstBlock, else_block: Option<AstBlock>},
     Return  { expr: Expression },
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone)]

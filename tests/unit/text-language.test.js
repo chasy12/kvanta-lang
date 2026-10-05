@@ -177,7 +177,7 @@ describe('strings and canvas text through the WASM interpreter', () => {
       func number() -> int { return 7; }
       func converted(int value) -> string { return string(value); }
       func main() {
-        array<int, 2> values = {10, 20};
+        int values[2] = {10, 20};
         text(10, 20, "Value: " + string(values[1] + number()));
         text(10, 60, converted(number()));
         text(10, 100, label);
@@ -200,7 +200,7 @@ describe('strings and canvas text through the WASM interpreter', () => {
   });
 
   it('formats expanded arrays after their declared size has materialized the values', async () => {
-    await run('array<int, 2> values = {42...}; text(10, 20, values); text(10, 50, string(values));');
+    await run('int values[2] = {42...}; text(10, 20, values); text(10, 50, string(values));');
     expect(drawn.map(item => item.content)).toEqual(['{42, 42}', '{42, 42}']);
   });
 
