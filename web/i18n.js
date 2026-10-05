@@ -7,7 +7,7 @@
  *   - Elements with `data-i18n="key"` get their text from `t(key)`, and
  *     `data-i18n-title` / `data-i18n-aria-label` / `data-i18n-empty` set those attributes.
  *   - `translateError` translates compiler and runtime error messages.
- *   - The choice is saved in localStorage; the first visit follows the browser language.
+ *   - The choice is saved in localStorage; the first visit uses Ukrainian.
  */
 
 import { ERROR_MESSAGES_UK } from './error-messages.js';
@@ -31,6 +31,11 @@ export const STRINGS = {
     source: 'Source',
     result: 'Result',
     console: 'Console',
+    openConsole: 'Open console',
+    closeConsole: 'Close console',
+    resizeConsole: 'Resize console',
+    newOutput: 'new output',
+    newErrors: 'new errors',
     clear: 'Clear',
     consoleEmpty: 'print() output and errors appear here',
     started: 'Program started',
@@ -66,6 +71,11 @@ export const STRINGS = {
     source: 'Код',
     result: 'Результат',
     console: 'Консоль',
+    openConsole: 'Відкрити консоль',
+    closeConsole: 'Закрити консоль',
+    resizeConsole: 'Змінити розмір консолі',
+    newOutput: 'новий вивід',
+    newErrors: 'нові помилки',
     clear: 'Очистити',
     consoleEmpty: 'Тут з’являться вивід print() і помилки',
     started: 'Програму запущено',
@@ -97,8 +107,7 @@ function initialLanguage() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (LANGUAGES.includes(saved)) return saved;
   } catch {}
-  const browser = (globalThis.navigator?.language ?? '').toLowerCase();
-  return browser.startsWith('uk') ? 'uk' : 'en';
+  return 'uk';
 }
 
 /** Replace `{0}`, `{1}`, … in `template` with `params`. */

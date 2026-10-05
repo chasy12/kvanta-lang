@@ -53,6 +53,7 @@ import { quantaTheme } from "./custom-theme";
 import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
+import { createConsoleLayout } from "./console-layout.js";
 import { createConsole, formatDuration } from "./console-panel.js";
 import { t, translateError, getLanguage, setLanguage, onLanguageChange, applyTranslations } from "./i18n.js";
 
@@ -65,9 +66,17 @@ const canvas = document.getElementById("canvas");
 const shareBtn = document.getElementById("shareBtn");
 /** Frame rate readout, shown only while an animation is running. */
 const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"), { format: (fps) => t("fps", fps) });
+const consoleLayout = createConsoleLayout({
+  container: document.getElementById('resultWrap'),
+  panel: document.getElementById('consolePanel'),
+  toggle: document.getElementById('consoleToggle'),
+  clear: document.getElementById('consoleClear'),
+  resize: document.getElementById('consoleResize'),
+});
 /** print() output, run status and errors. */
 const consolePanel = createConsole(document.getElementById("consoleLines"), {
   onJump: (row, column) => jumpTo(row, column),
+  onActivity: kind => consoleLayout.notify(kind),
 });
 setPrintHandler((text) => consolePanel.print(text));
 
@@ -526,6 +535,7 @@ function doRun() {
       isRunning = true;
       runBtn.disabled = true;
       consolePanel.clear();
+      consoleLayout.reset();
       consolePanel.start();
       setup();
       await initWasm();
@@ -640,7 +650,10 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-document.getElementById("consoleClear").addEventListener('click', () => consolePanel.clear());
+document.getElementById("consoleClear").addEventListener('click', () => {
+  consolePanel.clear();
+  consoleLayout.reset();
+});
 
 // ---------------------------------------------------------------------------
 // Language
@@ -661,6 +674,7 @@ for (const button of languageButtons) {
 
 onLanguageChange(() => {
   showLanguage();
+  consoleLayout.refresh();
   consolePanel.render();
   if (shownError) showError(editor, shownError);
 });

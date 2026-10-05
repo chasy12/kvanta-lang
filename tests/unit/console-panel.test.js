@@ -20,6 +20,7 @@ beforeEach(() => {
   panel = createConsole(el, { now: () => clock, maxEntries: 3 });
 });
 
+beforeEach(() => setLanguage('en'));
 afterEach(() => setLanguage('en'));
 
 describe('formatting', () => {
@@ -73,6 +74,20 @@ describe('createConsole', () => {
     panel.print('five');
     lines();
     expect(el.scrollTop).toBe(0);
+  });
+
+  it('does not overwrite the saved scroll position while the log is hidden', () => {
+    Object.defineProperties(el, {
+      clientHeight: { get: () => el.hidden ? 0 : 20 },
+      scrollHeight: { get: () => el.hidden ? 0 : el.children.length * 20 },
+    });
+    for (const text of ['one', 'two', 'three']) panel.print(text);
+    lines();
+    el.scrollTop = 20;
+    el.hidden = true;
+    panel.print('four');
+    lines();
+    expect(el.scrollTop).toBe(20);
   });
 
   it('continues following at the bottom when history rolls over', () => {
@@ -133,5 +148,19 @@ describe('createConsole', () => {
     panel.error({ error_code: 1, start_row: 4, start_column: 7, get_error_message: () => "Probably missing ';'" });
     lines()[0].querySelector('.console__loc').click();
     expect(jumps).toEqual([[4, 7]]);
+  });
+});
+
+
+describe('console activity', () => {
+  it('notifies for repeated prints and errors, but not run statuses', () => {
+    const activity = [];
+    panel = createConsole(el, { onActivity: kind => activity.push(kind) });
+    panel.info('started');
+    panel.print('x');
+    panel.print('x');
+    panel.error({ error_code: 4, start_row: 1, get_error_message: () => 'Division by 0' });
+    panel.message('Internal failure');
+    expect(activity).toEqual(['print', 'print', 'error', 'error']);
   });
 });

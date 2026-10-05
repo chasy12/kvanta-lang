@@ -176,6 +176,10 @@ print("Hello!");                    -- prints a line in the console
 print("x =", x, "y =", y);          -- any number of values of any type, joined by spaces
 ```
 
+Click the console header to close or reopen it. While closed, a dot marks new output;
+a red dot marks new errors. Drag the divider above the console to adjust its height,
+or focus the divider and use the arrow keys.
+
 Strings print without quotes, colors show a swatch, and identical lines in a row collapse
 into one with a ×N count. Each line shows the time since the program started.
 
@@ -432,6 +436,8 @@ kvanta-lang/
 - **HTML5 Canvas** — rendering target
 
 ## Translations
+
+Ukrainian is the default language. A language selected with EN / УК is remembered.
 
 Interface strings live in `web/i18n.js`. Compiler and runtime error messages are
 translated in `web/error-messages.js`, keyed by the Rust format string. When you add or
