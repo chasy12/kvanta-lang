@@ -115,6 +115,11 @@ describe('translateError', () => {
     ["'len' is a keyword, it cannot be a loop variable", "'len' є ключовим словом, його не можна використати як змінну циклу"],
     ['len expects 1 argument, got 2', 'len очікує 1 аргумент, отримано 2'],
     ['setTextSize expects 1 argument, got 2', 'setTextSize очікує 1 аргумент, отримано 2'],
+    ["Function 'abs' expects 1 argument, but got 2", "Функція 'abs' очікує 1 аргумент, отримано 2"],
+    ["Function 'abs' expects argument 'value' of type 'int' or 'float', but got 'bool'", "Функція 'abs' очікує аргумент 'value' типу 'int' або 'float', а отримано 'bool'"],
+    ['abs: -2147483648 has no int absolute value (overflow)', 'abs: модуль числа -2147483648 не вміщується в int через переповнення'],
+    ['abs: Expected argument type int or float but got bool', 'abs: очікується аргумент типу int або float, а отримано bool'],
+    ['abs: Expected 1 argument but got 0', 'abs: очікується 1 аргумент, отримано 0'],
   ])('translates integrated language diagnostics without changing identifiers: %s', (message, expected) => {
     setLanguage('uk');
     expect(translateError(message)).toBe(expected);
