@@ -185,40 +185,58 @@ into one with a ×N count. Each line shows the time since the program started.
 
 ### Program input
 
-Use one function, `input()`, to read a value. Its type comes from the code around it:
+Use `read(variable)` to read into an existing variable. Its declared type determines
+which values are accepted:
 
 ```
+string name = "";
 print("Your name:");
-string name = input();
+read(name);
+
+int age = 0;
 print("Your age:");
-int age = input();
-print("Radius:");
-float radius = input();
-print("Draw the circle? true / false");
-bool draw = input();
-print("Hello", name, "age", age, "radius", radius, "draw", draw);
+read(age);
+print("Hello", name, "age", age);
+```
+
+Read several values from one whitespace-separated row with multiple targets:
+
+```
+int x = 0;
+float y = 0.0;
+bool enabled = false;
+print("Enter x, y and enabled, for example: 10 2.5 true");
+read(x, y, enabled);
+print(x, y, enabled);
 ```
 
 - `int` accepts a whole number from -2147483648 to 2147483647.
 - `float` accepts a finite decimal number, including exponent notation.
 - `bool` accepts `true` or `false`.
-- `string` preserves spaces and accepts an empty line.
+- A single `string` target preserves spaces and accepts an empty line.
 
-`input()` takes no arguments. Declarations, assignments, function parameters and
-returns, conditions, loop bounds and typed expressions determine what it reads.
-For example, `circle(500, 500, input());` requests an integer radius. If the type
-is ambiguous, as in `print(input());`, the verifier asks for a typed context.
-Color and whole-array input are unsupported. Primitive array elements can use input.
+Multiple targets must be numeric or boolean. Read strings separately. The console
+requires exactly one value for each target and identifies invalid values by position.
+All values must be valid before any target is updated. Invalid input permits retrying;
+**Stop** cancels the request and leaves its targets unchanged.
 
-Use `print()` before input to ask a question. Execution pauses until the user submits
-a valid value in the console. Invalid input shows a message and permits a retry.
-The runtime also checks received values and reports failures at the input call.
-**Stop** cancels pending input. Global initializers and canvas event handlers support
-input too. Simultaneous requests appear in arrival order. The console opens when
-input is requested; closing it or clearing output retains the pending request.
+Targets must be mutable variables or primitive array elements, for example
+`read(values[2]);`. Constants, expressions, colors and whole arrays are rejected by
+the verifier. Array indices are resolved before the program waits for input, so
+`read(i, values[i]);` uses the original index. An invalid index reports a runtime error
+at the target without requesting input. `read(...)` is a statement and returns no value.
 
-The earlier `readInt()`, `readFloat()`, `readBool()` and `readString()` functions remain
-available for existing programs.
+Use `print()` before a read to ask a question. Execution pauses until the user submits
+a valid value in the console. The runtime also validates received values and reports
+failures at the read call. Reads work in functions, loops and canvas event handlers.
+Simultaneous requests appear in arrival order. Closing the console or clearing output
+retains a pending request; the console opens when input is first requested.
+
+Existing `input()` expressions remain compatible. Their type comes from declarations,
+assignments, parameters, returns, conditions or typed operands, for example
+`int age = input();` or `circle(500, 500, input());`. An ambiguous call such as
+`print(input());` needs a typed context. Legacy `readInt()`, `readFloat()`, `readBool()`
+and `readString()` calls also remain available.
 
 ### Verification
 
@@ -514,7 +532,7 @@ Run in watch mode (re-runs on file save):
 npm run test:watch
 ```
 
-The real WASM regression checks cover output, verification, input and runtime errors. Build a Node
+The real WASM regression checks cover output, verification, input, variable reads and runtime errors. Build a Node
 WASM package, then run them:
 
 ```bash
@@ -523,4 +541,5 @@ node tests/runtime/print.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/errors.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+node tests/runtime/read.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 ```

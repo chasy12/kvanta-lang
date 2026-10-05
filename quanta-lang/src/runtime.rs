@@ -31,7 +31,7 @@ impl Runtime {
         self.canvas.set_renderer(Some(renderer));
     }
 
-    /// Sets `(kind: string) => Promise<string | null>` for typed console input.
+    /// Sets `(kind: string | string[]) => Promise<string | null>` for console input.
     pub fn set_input_handler(&self, handler: js_sys::Function) {
         self.input.set_handler(handler);
     }

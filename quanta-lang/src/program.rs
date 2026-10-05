@@ -104,6 +104,42 @@ mod diagnostic_tests {
         assert!(arity_errors[0].message.contains("'input' expects 0 arguments"));
         assert_eq!(errors("if(true){float f=input();} float f=input();").len(), 0);
     }
+
+    #[test]
+    fn read_accepts_mutable_primitive_targets_in_both_checkers() {
+        for source in [
+            "int x=0; float y=0.0; bool z=false; read(x,y,z); read((x));",
+            "string name=\"\"; read(name); array<int,2> a={0...}; int i=0; read(i,a[i]);",
+            "array<array<float,2>,2> a={{0.0,0.0},{0.0,0.0}}; read(a[0][1]);",
+            "global{int g=0;} func change(int v){read(v,g);} func main(){int n=0; read(n); change(n);}",
+        ] {
+            assert!(errors(source).is_empty(), "{}: {:?}", source, errors(source));
+            assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_ok(), "{}", source);
+        }
+    }
+
+    #[test]
+    fn read_rejects_nonassignable_targets_and_collects_independent_errors() {
+        let source = "const int c=0; int x=0; color colorValue=Color::Red; array<int,1> a={0}; read(c,1,x+1,missing,a,colorValue);";
+        assert_eq!(errors(source).len(), 6, "{:?}", errors(source));
+        for source in ["read();", "int read=0;", "int x=0; int y=read(x);", "string s=\"\"; int x=0; read(s,x);", "const array<int,1> a={0}; read(a[0]);", "array<int,1> a={0}; read(a[missing]);"] {
+            assert!(!errors(source).is_empty(), "{}", source);
+            assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_err(), "{}", source);
+        }
+    }
+
+    #[test]
+    fn read_rejects_elements_under_intermediate_const_arrays() {
+        let source = "array<const array<int,2>,2> a={{0,0},{0,0}}; read(a[0][0]);";
+        assert_eq!(errors(source).len(), 1);
+        assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_err());
+    }
+
+    #[test]
+    fn read_checks_indices_despite_invalid_roots() {
+        assert_eq!(errors("const array<int,1> a={0}; read(a[missing]);").len(), 2);
+        assert_eq!(errors("read(unknown[missing]);").len(), 2);
+    }
 }
 
 impl Scope {
@@ -237,6 +273,7 @@ pub fn create_program(ast: AstProgram) -> Program {
             (String::from("blue"), int_type())
         ], Some(color_type()))),
         (String::from("print"), (vec![], None)),
+        (String::from("read"), (vec![], None)),
         (String::from("input"), (vec![], Some(int_type()))),
         (String::from("readInt"), (vec![], Some(int_type()))),
         (String::from("readFloat"), (vec![], Some(float_type()))),
@@ -245,7 +282,7 @@ pub fn create_program(ast: AstProgram) -> Program {
         (String::from("output"), (vec![], None)),
     ]), keywords: HashSet::from(["circle", "line", "rectangle", 
                     "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "setFps", "clear", "rgb",
-                    "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output", "readInt", "readFloat", "readBool", "readString",
+                    "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "read", "input", "output", "readInt", "readFloat", "readBool", "readString",
                     "for", "while", "global", "func", "if", "else", "break", "continue", "len",
                     "int", "bool", "color", "float", "string", "array", "Color", "true", "false"
     ].map(|x| String::from(x)))};
@@ -429,6 +466,11 @@ impl Program {
     }
 
     fn verify_call(&self, name: &str, args: &[Expression], coords: Coords, value: bool, errors: &mut Vec<Error>) {
+        if name == "read" {
+            if value { errors.push(Error::type_er(format!("Function {} has no return type", name), coords)); }
+            else { self.verify_read(args, coords, errors); }
+            return;
+        }
         let types: Vec<_> = args.iter().map(|arg| self.verify_expr(arg, errors)).collect();
         let Some((params, return_type)) = self.function_defs.get(name) else {
             errors.push(if value { Error::type_er(format!("Unknown function '{}'", name), coords) } else { Error::logic(format!("Unknown command: {}", name), coords) });
@@ -456,6 +498,66 @@ impl Program {
                 }
             }
         }
+    }
+
+    fn verify_read(&self, args: &[Expression], coords: Coords, errors: &mut Vec<Error>) {
+        if args.is_empty() {
+            errors.push(Error::type_er(String::from("read() requires at least one target"), coords));
+        }
+        for arg in args {
+            let Some(variable) = crate::read_targets::target(arg) else {
+                errors.push(Error::type_er(String::from("read() targets must be variables or array elements"), arg.coords));
+                continue;
+            };
+            // Index expressions are independent of whether the target root
+            // exists, is mutable or has a supported element type.
+            if let VariableCall::ArrayCall(_, indices) = variable {
+                for index in indices {
+                    let index = index.clone().to_expr();
+                    if let Some(typ) = self.verify_expr(&index, errors) {
+                        if typ.type_name != Primitive(Int) {
+                            errors.push(Error::type_er(String::from("Array indices must be integers"), index.coords));
+                        }
+                    }
+                }
+            }
+            let typ = match self.type_check_var(variable, arg.coords) {
+                Ok(typ) => typ,
+                Err(error) => { errors.push(error); continue; }
+            };
+            if self.read_target_is_const(variable) {
+                errors.push(Error::type_er(format!("Const variable {} cannot be reassigned", variable), arg.coords));
+                continue;
+            }
+            if !matches!(typ.type_name, Primitive(Int | Float | Bool | StringType)) {
+                errors.push(Error::type_er(format!("read() does not support target type {}", typ), arg.coords));
+                continue;
+            }
+            if args.len() > 1 && typ.type_name == Primitive(StringType) {
+                errors.push(Error::type_er(String::from("Read string targets separately"), arg.coords));
+            }
+        }
+    }
+
+    fn read_target_is_const(&self, variable: &VariableCall) -> bool {
+        let (name, depth) = match variable {
+            VariableCall::Name(name) => (name, 0),
+            VariableCall::ArrayCall(name, indices) => (name, indices.len()),
+        };
+        let Some((root, _)) = self.get(name) else { return false; };
+        let mut typ = root;
+        for step in 0..=depth {
+            if typ.is_const { return true; }
+            if step == depth { break; }
+            match &typ.type_name {
+                Array(inner, _) => {
+                    if let Some(inner) = inner.as_ref() { typ = inner; }
+                    else { break; }
+                }
+                _ => break,
+            }
+        }
+        false
     }
 
     fn verify_expr(&self, expr: &Expression, errors: &mut Vec<Error>) -> Option<Type> {
@@ -759,6 +861,11 @@ impl Program {
         }
         if name == "string" {
             return self.type_check_string_conversion(&args, coords).err();
+        }
+        if name == "read" {
+            let mut errors = vec![];
+            self.verify_read(&args, coords, &mut errors);
+            return errors.into_iter().next();
         }
         // todo warning unused return type
         if let Some((params, _)) = self.function_defs.get(&name) {

@@ -104,6 +104,43 @@ pub enum ControlFlow {
     Continue,
 }
 
+struct ReadTarget {
+    name: String,
+    indices: Vec<i32>,
+    scope: Option<usize>,
+    kind: &'static str,
+    coords: Coords,
+}
+
+/// Stage changes from the latest values while all affected scopes are locked.
+/// A failed update leaves every original variable intact.
+fn commit_read(scopes: &[Arc<Mutex<Scope>>], globals: &Arc<Mutex<HashMap<String, BaseValue>>>, targets: &[ReadTarget], values: Vec<BaseValueType>) -> Result<(), Error> {
+    let mut scopes: Vec<_> = scopes.iter().map(|scope| scope.lock().unwrap()).collect();
+    let mut globals = globals.lock().unwrap();
+    let mut staged: HashMap<(Option<usize>, String), BaseValue> = HashMap::new();
+    for (target, value) in targets.iter().zip(values) {
+        let key = (target.scope, target.name.clone());
+        if !staged.contains_key(&key) {
+            let current = match target.scope {
+                Some(index) => scopes[index].variables.get(&target.name),
+                None => globals.get(&target.name),
+            }.ok_or_else(|| Error::runtime(format!("Unknown variable: {}", target.name), target.coords))?;
+            staged.insert(key.clone(), current.clone());
+        }
+        let current = staged.get_mut(&key).unwrap();
+        let value = BaseValue { val: value, coords: target.coords };
+        if target.indices.is_empty() { *current = value; }
+        else { update_array(target.name.clone(), current, target.indices.clone(), value, target.coords)?; }
+    }
+    for ((scope, name), value) in staged {
+        match scope {
+            Some(index) => { scopes[index].variables.insert(name, value); }
+            None => { globals.insert(name, value); }
+        }
+    }
+    Ok(())
+}
+
 pub fn pack_color(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from_be_bytes([r, g, b, a])
 }
@@ -188,6 +225,63 @@ fn get_random() -> f64 {
 }
 
 impl Execution {
+
+    fn scope_chain(&self) -> Vec<Arc<Mutex<Scope>>> {
+        let mut scopes = vec![];
+        let mut next = Some(Arc::clone(&self.scope));
+        while let Some(scope) = next {
+            next = scope.lock().unwrap().outer_scope.clone();
+            scopes.push(scope);
+        }
+        scopes
+    }
+
+    async fn read_targets(&self, args: &[Expression], coords: Coords) -> Result<(), Error> {
+        let scopes = self.scope_chain();
+        let mut targets = Vec::with_capacity(args.len());
+        for arg in args {
+            let variable = crate::read_targets::target(arg).ok_or_else(|| {
+                Error::runtime(String::from("read() targets must be variables or array elements"), arg.coords)
+            })?;
+            let (name, expressions) = match variable {
+                VariableCall::Name(name) => (name, &[][..]),
+                VariableCall::ArrayCall(name, indices) => (name, indices.as_slice()),
+            };
+            let mut indices = Vec::with_capacity(expressions.len());
+            for expression in expressions {
+                let expression = expression.clone().to_expr();
+                match self.calculate_expression(&expression).await?.val {
+                    BaseValueType::Int(index) => indices.push(index),
+                    _ => return Err(Error::runtime(String::from("Array indices must be integers"), arg.coords)),
+                }
+            }
+            let owner = scopes.iter().position(|scope| scope.lock().unwrap().variables.contains_key(name));
+            let current = match owner {
+                Some(index) => scopes[index].lock().unwrap().variables.get(name).cloned(),
+                None => self.global_vars.lock().unwrap().get(name).cloned(),
+            }.ok_or_else(|| Error::runtime(format!("Unknown variable: {}", name), arg.coords))?;
+            let value = index_array(name, &current, &indices, arg.coords)?;
+            let kind = match value.val {
+                BaseValueType::Int(_) => "int",
+                BaseValueType::Float(_) => "float",
+                BaseValueType::Bool(_) => "bool",
+                BaseValueType::StringVal(_) => "string",
+                _ => return Err(Error::runtime(format!("read() does not support target type {}", value.get_type(&|_| None)?.to_string()), arg.coords)),
+            };
+            targets.push(ReadTarget { name: name.clone(), indices, scope: owner, kind, coords: arg.coords });
+        }
+        if targets.is_empty() {
+            return Err(Error::runtime(String::from("read() requires at least one target"), coords));
+        }
+        self.canvas.flush(false);
+        let values = if targets.len() == 1 {
+            vec![self.input.read(targets[0].kind, coords).await?]
+        } else {
+            let kinds: Vec<_> = targets.iter().map(|target| target.kind).collect();
+            self.input.read_many(&kinds, coords).await?
+        };
+        commit_read(&scopes, &self.global_vars, &targets, values)
+    }
 
     fn style(&self) -> Style {
         Style {
@@ -630,6 +724,7 @@ impl Execution {
             for line in nodes {
                 match &line.statement {
                     AstStatement::Command { name, args, named_args } => {
+                        if name == "read" { self.read_targets(args, line.coords).await?; continue; }
                         let vals = self.evaluate_args(args).await?;
                         if name == "text" {
                             self.draw_text(vals, named_args).await?;

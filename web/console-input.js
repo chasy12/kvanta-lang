@@ -3,9 +3,13 @@ import { t } from './i18n.js';
 const FLOAT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const ERROR_KEYS = { int: 'invalidInt', float: 'invalidFloat', bool: 'invalidBool' };
 
+function trimInput(raw) {
+  return raw.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
+}
+
 function valid(kind, raw) {
   // Rust str::trim uses Unicode White_Space, which differs from JS trim.
-  const text = raw.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
+  const text = trimInput(raw);
   switch (kind) {
     case 'int': return /^[+-]?\d+$/.test(text) && Number(text) >= -2147483648 && Number(text) <= 2147483647;
     case 'float': return FLOAT.test(text) && Number.isFinite(Math.fround(Number(text)));
@@ -13,6 +17,17 @@ function valid(kind, raw) {
     case 'string': return true;
     default: return false;
   }
+}
+
+function validation(kinds, raw) {
+  if (kinds.length === 1) {
+    return valid(kinds[0], raw) ? null : { kind: kinds[0] };
+  }
+  const text = trimInput(raw);
+  const values = text ? text.split(/\p{White_Space}+/u) : [];
+  if (values.length !== kinds.length) return { count: values.length };
+  const index = kinds.findIndex((kind, index) => !valid(kind, values[index]));
+  return index === -1 ? null : { kind: kinds[index], position: index + 1 };
 }
 
 /** One console form serves concurrent runtime requests in arrival order. */
@@ -38,23 +53,31 @@ export function createConsoleInput(host, { onRequest = () => {}, onSubmit = () =
   host.replaceChildren(form);
   host.hidden = true;
   let queue = [];
-  let invalid = false;
+  let invalid = null;
 
   function refresh() {
     const pending = queue[0];
     host.hidden = !pending;
     if (!pending) return;
-    caption.textContent = t('enterInput', pending.kind);
+    const kind = pending.kinds.length === 1 ? pending.kinds[0] : null;
+    caption.textContent = kind ? t('enterInput', kind) : t('enterInputs', pending.kinds.length, pending.kinds.join(' '));
     button.textContent = t('submitInput');
-    field.inputMode = pending.kind === 'int' ? 'numeric' : pending.kind === 'float' ? 'decimal' : 'text';
-    field.placeholder = pending.kind === 'bool' ? 'true / false' : '';
-    field.setAttribute('aria-invalid', String(invalid));
+    field.inputMode = kind === 'int' ? 'numeric' : kind === 'float' ? 'decimal' : 'text';
+    field.placeholder = kind === 'bool' ? 'true / false' : '';
+    field.setAttribute('aria-invalid', String(Boolean(invalid)));
     error.hidden = !invalid;
-    error.textContent = invalid ? t(ERROR_KEYS[pending.kind] ?? 'invalidInput') : '';
+    error.textContent = '';
+    if (invalid) {
+      if (invalid.count !== undefined) error.textContent = t('inputCount', pending.kinds.length, invalid.count);
+      else {
+        const message = t(ERROR_KEYS[invalid.kind] ?? 'invalidInput');
+        error.textContent = invalid.position ? t('inputValue', invalid.position, message) : message;
+      }
+    }
   }
 
   function next() {
-    invalid = false;
+    invalid = null;
     field.value = '';
     refresh();
     if (queue.length) {
@@ -68,8 +91,8 @@ export function createConsoleInput(host, { onRequest = () => {}, onSubmit = () =
     const pending = queue[0];
     if (!pending) return;
     const raw = field.value;
-    if (!valid(pending.kind, raw)) {
-      invalid = true;
+    invalid = validation(pending.kinds, raw);
+    if (invalid) {
       refresh();
       field.focus();
       return;
@@ -82,9 +105,11 @@ export function createConsoleInput(host, { onRequest = () => {}, onSubmit = () =
 
   return {
     request(kind) {
-      if (!['int', 'float', 'bool', 'string'].includes(kind)) return Promise.reject(new Error(t('invalidInput')));
+      const kinds = Array.isArray(kind) ? [...kind] : [kind];
+      if (!kinds.length || kinds.some(kind => !['int', 'float', 'bool', 'string'].includes(kind)) ||
+          (kinds.length > 1 && kinds.includes('string'))) return Promise.reject(new Error(t('invalidInput')));
       return new Promise(resolve => {
-        queue.push({ kind, resolve });
+        queue.push({ kinds, resolve });
         if (queue.length === 1) next();
       });
     },

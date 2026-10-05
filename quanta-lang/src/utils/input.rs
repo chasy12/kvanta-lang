@@ -39,6 +39,22 @@ impl Input {
     }
 
     pub async fn read(&self, kind: &str, coords: Coords) -> Result<BaseValueType, Error> {
+        let response = self.request(&JsValue::from_str(kind), coords).await?;
+        let raw = response.as_string().ok_or_else(|| invalid_input(kind, coords))?;
+        parse_value(kind, &raw).ok_or_else(|| invalid_input(kind, coords))
+    }
+
+    pub async fn read_many(&self, kinds: &[&str], coords: Coords) -> Result<Vec<BaseValueType>, Error> {
+        let descriptor = js_sys::Array::new();
+        for kind in kinds { descriptor.push(&JsValue::from_str(kind)); }
+        let response = self.request(descriptor.as_ref(), coords).await?;
+        let raw = response.as_string().ok_or_else(|| {
+            Error::runtime(String::from("Invalid input row: expected text"), coords)
+        })?;
+        parse_row(kinds, &raw, coords)
+    }
+
+    async fn request(&self, descriptor: &JsValue, coords: Coords) -> Result<JsValue, Error> {
         let (id, handler, cancelled) = {
             let mut state = self.state.lock().unwrap();
             if state.cancelled {
@@ -55,7 +71,7 @@ impl Input {
         };
 
         // Never keep a mutex guard while invoking JavaScript or awaiting it.
-        let result = match handler.call1(&JsValue::NULL, &JsValue::from_str(kind)) {
+        let result = match handler.call1(&JsValue::NULL, descriptor) {
             Ok(response) => {
                 match select(JsFuture::from(Promise::resolve(&response)), cancelled).await {
                     Either::Left((response, _)) => response.map_err(|_| {
@@ -77,13 +93,27 @@ impl Input {
         if response.is_null() {
             return Err(Error::runtime(String::from("Input request cancelled"), coords));
         }
-        let raw = response.as_string().ok_or_else(|| {
-            invalid_input(kind, coords)
-        })?;
-        parse_value(kind, &raw).ok_or_else(|| {
-            invalid_input(kind, coords)
-        })
+        Ok(response)
     }
+}
+
+fn parse_row(kinds: &[&str], raw: &str, coords: Coords) -> Result<Vec<BaseValueType>, Error> {
+    let values: Vec<_> = raw.split_whitespace().collect();
+    if values.len() != kinds.len() {
+        return Err(Error::runtime(format!("Input row expects {} values, got {}", kinds.len(), values.len()), coords));
+    }
+    kinds.iter().zip(values).enumerate().map(|(index, (kind, raw))| {
+        parse_value(kind, raw).ok_or_else(|| {
+            let position = index + 1;
+            let message = match *kind {
+                "int" => format!("Invalid int input at position {}: expected a whole number from -2147483648 to 2147483647", position),
+                "float" => format!("Invalid float input at position {}: expected a finite decimal number", position),
+                "bool" => format!("Invalid bool input at position {}: expected true or false", position),
+                _ => return invalid_input(kind, coords),
+            };
+            Error::runtime(message, coords)
+        })
+    }).collect()
 }
 
 fn invalid_input(kind: &str, coords: Coords) -> Error {

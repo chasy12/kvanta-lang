@@ -2,6 +2,7 @@ mod utils;
 mod compiler;
 mod program;
 mod input_inference;
+mod read_targets;
 mod execution;
 #[cfg(test)]
 mod control_flow_tests;

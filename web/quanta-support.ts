@@ -218,6 +218,7 @@ export const rawCompletionItems = [
   {label: "setTextItalic", type: "function"},
   {label: "setTextLineHeight", type: "function"},
   {label: "print", type: "function"},
+  {label: "read", type: "function"},
   {label: "input", type: "function"},
 ];
 
