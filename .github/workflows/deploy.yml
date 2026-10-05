@@ -32,6 +32,11 @@ jobs:
         with:
           tool: wasm-pack
 
+      - name: Test interpreter and parser
+        run: |
+          cargo test --manifest-path quanta-lang/Cargo.toml
+          cargo test --manifest-path quanta_parser/Cargo.toml
+
       - name: Build interpreter (WASM)
         working-directory: quanta-lang
         run: wasm-pack build --release --target web
@@ -48,6 +53,7 @@ jobs:
           node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
           node tests/runtime/errors.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
           node tests/runtime/read.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+          node tests/runtime/integration.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 
       - run: npm ci
       - run: npm test

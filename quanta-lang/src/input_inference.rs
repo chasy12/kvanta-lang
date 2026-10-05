@@ -45,6 +45,14 @@ fn element_type(typ: &Type) -> Option<Type> {
     }
 }
 
+fn mutable_copy_type(mut typ: Type) -> Type {
+    typ.is_const = false;
+    if let TypeName::Array(inner, _) = &mut typ.type_name {
+        if let Some(element) = inner.as_mut() { *element = mutable_copy_type(element.clone()); }
+    }
+    typ
+}
+
 fn underlying_type(mut typ: Type) -> Type {
     while let Some(inner) = element_type(&typ) { typ = inner; }
     typ
@@ -75,13 +83,26 @@ impl Resolver {
                 variables.entry(val.clone()).or_insert_with(|| typ.clone());
             }
             AstStatement::SetVal { val, expr } => {
+                self.variable_indices(val, variables);
                 self.expression(expr, variable_type(val, variables).as_ref(), variables);
             }
-            AstStatement::Command { name, args } => {
+            AstStatement::Command { name, args, named_args } => {
                 self.arguments(name, args, variables);
+                for (option, expression) in named_args {
+                    let expected = crate::utils::text::option_type(option).map(Type::typ);
+                    self.expression(expression, expected.as_ref(), variables);
+                }
                 if name == "input" && args.is_empty() {
                     self.errors.push(Error::type_er(String::from("Cannot infer input type; use input() in a typed expression"), coords));
                 }
+            }
+            AstStatement::Break | AstStatement::Continue => {},
+            AstStatement::ForEach { val, iterable, block } => {
+                self.expression(iterable, None, variables);
+                let element = self.hint(iterable, variables).and_then(|typ| element_type(&typ)).map(mutable_copy_type);
+                let mut locals = variables.clone();
+                if let Some(element) = element { locals.insert(val.clone(), element); }
+                self.block(block, &mut locals, returned);
             }
             AstStatement::Return { expr } => self.expression(expr, returned, variables),
             AstStatement::If { clause, block, else_block } => {
@@ -99,6 +120,15 @@ impl Resolver {
                 let mut locals = variables.clone();
                 locals.insert(val.clone(), integer);
                 self.block(block, &mut locals, returned);
+            }
+        }
+    }
+
+    fn variable_indices(&mut self, variable: &mut VariableCall, variables: &Variables) {
+        if let VariableCall::ArrayCall(_, indices) = variable {
+            let expected = Type::typ(BaseType::Int);
+            for index in indices {
+                index.visit_function_calls(&mut |function| self.value(function, Some(&expected), variables));
             }
         }
     }
@@ -121,8 +151,13 @@ impl Resolver {
             ExpressionType::Unary(_, inner) => self.hint(inner, variables),
             ExpressionType::Binary(op, left, right) => {
                 if !is_arith(*op) { return Some(Type::typ(BaseType::Bool)); }
-                let left = self.hint(left, variables).filter(numeric);
-                let right = self.hint(right, variables).filter(numeric);
+                let left = self.hint(left, variables);
+                let right = self.hint(right, variables);
+                if *op == Operator::Plus && [&left, &right].iter().any(|hint| hint.as_ref().is_some_and(|typ| typ.type_name == TypeName::Primitive(BaseType::StringType))) {
+                    return Some(Type::typ(BaseType::StringType));
+                }
+                let left = left.filter(numeric);
+                let right = right.filter(numeric);
                 if left.as_ref().is_some_and(|typ| typ.type_name == TypeName::Primitive(BaseType::Float)) ||
                     right.as_ref().is_some_and(|typ| typ.type_name == TypeName::Primitive(BaseType::Float)) {
                     Some(Type::typ(BaseType::Float))
@@ -162,13 +197,21 @@ impl Resolver {
                 let hint = if *op == Operator::AND || *op == Operator::OR {
                     Some(Type::typ(BaseType::Bool))
                 } else {
-                    // Comparisons return bool, but their operands remain numeric.
-                    let left_hint = self.hint(left, variables).filter(numeric);
-                    let right_hint = self.hint(right, variables).filter(numeric);
-                    let result_hint = if is_arith(*op) { expected.filter(|typ| numeric(typ)).cloned() } else { None };
-                    if [&left_hint, &right_hint].iter().any(|hint| hint.as_ref().is_some_and(|typ| typ.type_name == TypeName::Primitive(BaseType::Float))) {
-                        Some(Type::typ(BaseType::Float))
-                    } else { left_hint.or(right_hint).or(result_hint) }
+                    let left_hint = self.hint(left, variables);
+                    let right_hint = self.hint(right, variables);
+                    let string = TypeName::Primitive(BaseType::StringType);
+                    if matches!(*op, Operator::Plus | Operator::EQ | Operator::NQ) && (
+                        [&left_hint, &right_hint].iter().any(|hint| hint.as_ref().is_some_and(|typ| typ.type_name == string)) ||
+                        (*op == Operator::Plus && expected.is_some_and(|typ| typ.type_name == string))) {
+                        Some(Type::typ(BaseType::StringType))
+                    } else {
+                        let left_hint = left_hint.filter(numeric);
+                        let right_hint = right_hint.filter(numeric);
+                        let result_hint = if is_arith(*op) { expected.filter(|typ| numeric(typ)).cloned() } else { None };
+                        if [&left_hint, &right_hint, &result_hint].iter().any(|hint| hint.as_ref().is_some_and(|typ| typ.type_name == TypeName::Primitive(BaseType::Float))) {
+                            Some(Type::typ(BaseType::Float))
+                        } else { left_hint.or(right_hint).or(result_hint) }
+                    }
                 };
                 self.expression(left, hint.as_ref(), variables);
                 self.expression(right, hint.as_ref(), variables);
@@ -178,6 +221,7 @@ impl Resolver {
 
     fn value(&mut self, value: &mut BaseValue, expected: Option<&Type>, variables: &Variables) {
         match &mut value.val {
+            BaseValueType::Id(variable) => self.variable_indices(variable, variables),
             BaseValueType::FunctionCall(name, args, typ) => {
                 self.arguments(name, args, variables);
                 if name != "input" || !args.is_empty() { return; }

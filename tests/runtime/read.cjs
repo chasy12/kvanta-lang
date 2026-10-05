@@ -55,7 +55,7 @@ function error(result, pattern, row = 2) {
   assert.deepEqual(ok(row), ['-2147483648 125 true']);
 
   for (const raw of [' hello world ', '']) {
-    const string = await run('string text="old"; read((text)); print(text);', descriptor => {
+    const string = await run('string message="old"; read((message)); print(message);', descriptor => {
       assert.equal(descriptor, 'string');
       return Promise.resolve(raw);
     });

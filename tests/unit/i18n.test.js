@@ -22,13 +22,13 @@ function rustFiles(dir) {
 /** Every error message format string in the Rust sources. */
 function rustErrorTemplates() {
   const templates = new Set();
-  const pattern = /Error::(?:parse|logic|type_er|runtime)\(\s*(?:format!\(|String::from\()\s*"((?:[^"\\]|\\.)*)"/g;
+  const pattern = /Error::(?:parse|logic|type_er|runtime)\(\s*(?:(?:format!|String::from)\(\s*)?"((?:[^"\\]|\\.)*)"/g;
   for (const file of [...rustFiles(join(ROOT, 'quanta-lang/src')), ...rustFiles(join(ROOT, 'quanta_parser/src'))]) {
     const code = readFileSync(file, 'utf8')
       .split('\n')
       .filter(line => !line.trim().startsWith('//'))
       .join('\n');
-    for (const match of code.matchAll(pattern)) templates.add(match[1]);
+    for (const match of code.matchAll(pattern)) templates.add(JSON.parse(`"${match[1]}"`));
   }
   return [...templates];
 }
@@ -100,6 +100,24 @@ describe('translateError', () => {
   it('returns unknown messages unchanged', () => {
     setLanguage('uk');
     expect(translateError('Something new')).toBe('Something new');
+  });
+
+  it.each([
+    ["Unknown text option 'colour'", "Невідомий параметр тексту 'colour'"],
+    ["Duplicate text option 'size'", "Параметр тексту 'size' вказано повторно"],
+    ["Text option 'bold' expects 'bool', got 'int'", "Параметр тексту 'bold' очікує тип 'bool', а отримано 'int'"],
+    ["Text option 'size' requires a positive int", "Параметр тексту 'size' потребує додатного значення int"],
+    ["Text option 'font' requires a non-empty font name without control characters", "Параметр тексту 'font' потребує непорожньої назви шрифту без керувальних символів"],
+    ["Text option 'align' requires left, center, right, start or end", "Параметр тексту 'align' має бути left, center, right, start або end"],
+    ["Text option 'lineHeight' requires a positive finite float", "Параметр тексту 'lineHeight' потребує додатного скінченного значення float"],
+    ["Unknown string escape: \\q", "Невідома escape-послідовність у рядку: \\q"],
+    ['break can only be used inside a loop', 'break можна використовувати лише всередині циклу'],
+    ["'len' is a keyword, it cannot be a loop variable", "'len' є ключовим словом, його не можна використати як змінну циклу"],
+    ['len expects 1 argument, got 2', 'len очікує 1 аргумент, отримано 2'],
+    ['setTextSize expects 1 argument, got 2', 'setTextSize очікує 1 аргумент, отримано 2'],
+  ])('translates integrated language diagnostics without changing identifiers: %s', (message, expected) => {
+    setLanguage('uk');
+    expect(translateError(message)).toBe(expected);
   });
 });
 
@@ -174,4 +192,11 @@ describe('language on reload', () => {
     expect(() => i18n.setLanguage('uk')).not.toThrow();
     expect(i18n.t('run')).toBe('Запустити програму!');
   });
+});
+
+
+it('translates new parser rules while preserving the quoted source', () => {
+  setLanguage('uk');
+  expect(translateError("ERROR expected array_dimension or named_argument on line 'text(1, 2, named_argument)'"))
+    .toBe("Помилка: очікується розмір масиву або іменований аргумент у рядку 'text(1, 2, named_argument)'");
 });

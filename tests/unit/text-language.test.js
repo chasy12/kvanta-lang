@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import initWasm, { Compiler } from '../../quanta-lang/pkg/quanta_lang.js';
-import { cancelNow, drawCommands } from '../../web/canvas-runtime.js';
+import { cancelNow, drawCommands, setPrintHandler } from '../../web/canvas-runtime.js';
 
 const ctx = globalThis.__mockBufferCtx;
 let drawn;
@@ -187,15 +187,16 @@ describe('strings and canvas text through the WASM interpreter', () => {
   });
 
   it('prints variables with the same display formatting and preserves string whitespace', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const output = vi.fn();
+    setPrintHandler(output);
     try {
       await run('string name = "Artem"; int score = 42; print("Score:", score, name, true, {1, 2}); print("  hello  ");');
-      expect(log.mock.calls).toEqual([
-        ['Print:Score: 42 Artem true {1, 2}'],
-        ['Print:  hello  '],
+      expect(output.mock.calls).toEqual([
+        ['Score: 42 Artem true {1, 2}'],
+        ['  hello  '],
       ]);
     } finally {
-      log.mockRestore();
+      setPrintHandler(text => console.log(text));
     }
   });
 
