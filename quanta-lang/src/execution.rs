@@ -139,19 +139,19 @@ macro_rules! expect_arg {
     }};
 }
 
-fn update_array(name: String, array: &mut BaseValue, mut integer_indices: Vec<i32>, val: BaseValue) -> Result<(), Error> {
+fn update_array(name: String, array: &mut BaseValue, mut integer_indices: Vec<i32>, val: BaseValue, coords: Coords) -> Result<(), Error> {
         if let BaseValueType::Array(elems) = &mut array.val {
             let index = integer_indices.remove(0);
             if index < 0 || index as usize >= elems.len() {
-                return Err(Error::runtime(format!("Index out of bounds for array {}: {}", name, index), array.coords));
+                return Err(Error::runtime(format!("Index out of bounds for array {}: {}", name, index), coords));
             }
             if integer_indices.len() == 0 {
                 elems[index as usize] = val;
                 return Ok(());
             }
-            return update_array(format!("{}[{}]", name, index), elems.get_mut(index as usize).unwrap(), integer_indices, val);
+            return update_array(format!("{}[{}]", name, index), elems.get_mut(index as usize).unwrap(), integer_indices, val, coords);
         } else {
-            return Err(Error::runtime(format!("Variable {} is not an array", name), array.coords));
+            return Err(Error::runtime(format!("Variable {} is not an array", name), coords));
         }
     }
 
@@ -315,7 +315,7 @@ impl Execution {
                         _ => return Err(Error::runtime(String::from("Array indices must be integers"), coords)),
                     }
                 }
-                self.with_var_mut(name, |array| update_array(name.clone(), array, integer_indices, val))
+                self.with_var_mut(name, |array| update_array(name.clone(), array, integer_indices, val, coords))
                     .unwrap_or_else(|| Err(Error::runtime(format!("Unknown array: {} ", name), coords)))
             }
         }
@@ -829,8 +829,20 @@ fn compare_ints(x: i32, y : i32, op: Operator, coords: Coords) -> Result<BaseVal
         Operator::Plus => Ok(int(x + y, coords)),
         Operator::Minus => Ok(int(x - y, coords)),
         Operator::Mult => Ok(int(x * y, coords)),
-        Operator::Div => if y == 0 { Err(Error::runtime(format!("Division by 0"), coords)) } else {Ok(int(x / y, coords)) },
-        Operator::Mod => Ok(int(x % y, coords)),
+        Operator::Div => {
+            if y == 0 {
+                return Err(Error::runtime(String::from("Division by 0"), coords));
+            }
+            x.checked_div(y).map(|value| int(value, coords))
+                .ok_or_else(|| Error::runtime(String::from("Integer overflow"), coords))
+        },
+        Operator::Mod => {
+            if y == 0 {
+                return Err(Error::runtime(String::from("Division by 0"), coords));
+            }
+            x.checked_rem(y).map(|value| int(value, coords))
+                .ok_or_else(|| Error::runtime(String::from("Integer overflow"), coords))
+        },
         v => Err(Error::runtime(format!("Cannot apply operator {:?} to values of type int!",v), coords))   
     }
 }
@@ -849,7 +861,7 @@ fn compare_floats(x: f32, y : f32, op: Operator, coords: Coords) -> Result<BaseV
         Operator::Minus => Ok(flt(x - y, coords)),
         Operator::Mult => Ok(flt(x * y, coords)),
         Operator::Div => if y == 0.0 { Err(Error::runtime(format!("Division by 0"), coords)) } else {Ok(flt(x / y, coords)) },
-        Operator::Mod => Ok(flt(x % y, coords)),
+        Operator::Mod => if y == 0.0 { Err(Error::runtime(String::from("Division by 0"), coords)) } else { Ok(flt(x % y, coords)) },
 
         v => Err(Error::runtime(format!("Cannot apply operator {:?} to values of type float!",v), coords))
 

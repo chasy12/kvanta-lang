@@ -59,6 +59,51 @@ mod diagnostic_tests {
         assert!(errors(source).is_empty());
         assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_ok());
     }
+
+    #[test]
+    fn infers_input_from_declared_types_in_both_checkers() {
+        for source in [
+            "int n=input(); float f=input(); bool b=input(); string s=input();",
+            "float f=0.0; f=input(); array<string,2> a={input(),input()}; a[0]=input();",
+            "global { string s=input(); } func next(float x)->float { return input(); } func main(){ float f=next(input()); }",
+            "if(input()){ bool b=!input(); } while(input()){int n=input();} for i in(input()..input()){print(i);}",
+            "float f=input()+input(); print(input()+1.5, 1+input(), input()<2.5, round(input()));",
+            "array<array<float,2>,2> a={{input(),input()},{input(),input()}}; array<float,2> b={input()...};",
+        ] {
+            assert!(errors(source).is_empty(), "{}: {:?}", source, errors(source));
+            assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_ok(), "{}", source);
+        }
+    }
+
+    #[test]
+    fn rejects_and_collects_ambiguous_input_calls() {
+        let errors = errors("print(input(), input());");
+        assert_eq!(errors.len(), 2, "{:?}", errors);
+        assert!(errors.iter().all(|error| error.message == "Cannot infer input type; use input() in a typed expression"));
+        assert_eq!(errors[0].start, (1, 7));
+        assert!(create_program(quanta_parser::parse_ast("print(input());").unwrap()).type_check().is_err());
+        assert_eq!(self::errors("input();").len(), 1);
+    }
+
+    #[test]
+    fn rejects_unsupported_input_types() {
+        for source in ["color c=input();", "array<int,2> a=input();"] {
+            let errors = errors(source);
+            assert_eq!(errors.len(), 1, "{}: {:?}", source, errors);
+            assert!(errors[0].message.starts_with("input() does not support type"), "{}", source);
+        }
+    }
+
+    #[test]
+    fn input_inference_preserves_numeric_constraints_and_independent_errors() {
+        assert!(!errors("float f=input()+1;").is_empty());
+        assert_eq!(errors("print(input()); int n=true;").len(), 2);
+        assert_eq!(errors("if(input()<input()){} int n=true;").len(), 3);
+        let arity_errors = errors("int n=input(1);");
+        assert_eq!(arity_errors.len(), 1, "{:?}", arity_errors);
+        assert!(arity_errors[0].message.contains("'input' expects 0 arguments"));
+        assert_eq!(errors("if(true){float f=input();} float f=input();").len(), 0);
+    }
 }
 
 impl Scope {
@@ -225,11 +270,11 @@ pub fn create_program(ast: AstProgram) -> Program {
 
 impl Program {
 
-    /// Inspect independent statements and expression children without changing
-    /// the executable AST. Failed declarations retain their declared type so
+    /// Resolve input types and inspect independent statements without executing
+    /// the program. Failed declarations retain their declared type so
     /// the next use does not produce a misleading undefined-variable error.
     pub fn verify_all(&mut self) -> Vec<Error> {
-        let mut errors = vec![];
+        let mut errors = crate::input_inference::resolve(&mut self.lines, &self.function_defs);
         match self.lines.clone() {
             AstProgram::Block(block) => { self.verify_block(block, &mut errors); },
             AstProgram::Forest((functions, globals)) => {
@@ -239,12 +284,12 @@ impl Program {
                 for (statement, coords) in globals {
                     if let AstStatement::Init { typ, val, expr } = statement {
                         let before = errors.len();
-                        self.verify_expr(&expr, &mut errors);
+                        let verified = self.verify_expr(&expr, &mut errors).is_some();
                         let keyword = self.keywords.contains(&val);
                         let duplicate = self.contains_key(&val);
                         if keyword { errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", val), coords)); }
                         else if duplicate { errors.push(Error::logic(format!("Global variable {} is re-defined!", val), coords)); }
-                        if before == errors.len() {
+                        if verified && before == errors.len() {
                             if let Err(error) = self.type_check_init(typ.clone(), val.clone(), expr.clone(), coords) { errors.push(error); }
                         }
                         if !self.keywords.contains(&val) && !self.contains_key(&val) {
@@ -317,12 +362,12 @@ impl Program {
                 AstStatement::Command { name, args } => self.verify_call(&name, &args, node.coords, false, errors),
                 AstStatement::Init { typ, val, expr } => {
                     let before = errors.len();
-                    self.verify_expr(&expr, errors);
+                    let verified = self.verify_expr(&expr, errors).is_some();
                     let keyword = self.keywords.contains(&val);
                     let duplicate = self.contains_key(&val);
                     if keyword { errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", val), node.coords)); }
                     else if duplicate { errors.push(Error::logic(format!("Variable {} is re-defined!", val), node.coords)); }
-                    if before == errors.len() {
+                    if verified && before == errors.len() {
                         if let Err(error) = self.type_check_init(typ.clone(), val.clone(), expr.clone(), node.coords) { errors.push(error); }
                     }
                     if !keyword && !duplicate {
@@ -331,9 +376,9 @@ impl Program {
                 },
                 AstStatement::SetVal { val, expr } => {
                     let before = errors.len();
-                    self.verify_expr(&expr, errors);
+                    let verified = self.verify_expr(&expr, errors).is_some();
                     if let Err(error) = self.type_check_var(&val, node.coords) { errors.push(error); }
-                    if before == errors.len() {
+                    if verified && before == errors.len() {
                         if let Err(error) = self.type_check_set_val(val, expr, node.coords) { errors.push(error); }
                     }
                 },
@@ -430,7 +475,11 @@ impl Program {
                 }
             },
         }
-        if errors.len() != before { return None; }
+        // The inference pass may already have diagnosed an input within this
+        // expression. Visit its siblings, then suppress dependent type errors.
+        let (row, col, end_row, end_col) = expr.coords;
+        if errors.len() != before || errors.iter().any(|error|
+            error.start >= (row, col) && error.finish <= (end_row, end_col)) { return None; }
         match self.type_check_expr(expr) {
             Ok(typ) => Some(typ),
             Err(error) => { errors.push(error); None },
@@ -474,6 +523,9 @@ impl Program {
     }
 
     pub fn type_check(&mut self) -> Result<ReturnType, Error> {
+        if let Some(error) = crate::input_inference::resolve(&mut self.lines, &self.function_defs).into_iter().next() {
+            return Err(error);
+        }
         match self.lines {
             AstProgram::Block(ref block) => {
                 Self::validate_loop_control(block, self.loop_depth)?;
