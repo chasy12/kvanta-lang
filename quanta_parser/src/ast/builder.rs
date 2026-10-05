@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use pest::iterators::{Pairs, Pair};
 use crate::{ast::{keys::key_to_number, AstFunction, AstProgram, AstStatement, BaseValueType, Coords, ExpressionType, FunctionsAndGlobals, HalfParsedAstFunction, SimpleExpression, SimpleExpressionType, SimpleValue, SimpleValueType, Type, TypeName, VariableCall}, error::Error, Rule};
@@ -16,17 +16,23 @@ macro_rules! coords {
 }
 
 pub struct AstBuilder {
-    pub function_signatures : HashMap<String, (Vec<Type>, Option<Type>)>
+    pub function_signatures : HashMap<String, (Vec<Type>, Option<Type>)>,
+    pub diagnostics: RefCell<Vec<Error>>,
 }
 
 impl AstBuilder {
 
 pub fn new() -> AstBuilder
 {
-    AstBuilder{ function_signatures: HashMap::new() }
+    AstBuilder{ function_signatures: HashMap::new(), diagnostics: RefCell::new(vec![]) }
 }
 
 pub fn build_ast_from_doc(&mut self, docs: Pairs<Rule>) -> Result<AstProgram, Error> {
+    for (name, typ) in [("input", BaseType::Int), ("readInt", BaseType::Int),
+        ("readFloat", BaseType::Float), ("readBool", BaseType::Bool),
+        ("readString", BaseType::StringType)] {
+        self.function_signatures.insert(name.to_string(), (vec![], Some(Type::typ(typ))));
+    }
     self.function_signatures.insert(String::from("rgb"), (vec![Type::typ(BaseType::Int), Type::typ(BaseType::Int), Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Color))));
     self.function_signatures.insert(String::from("round"), (vec![Type::typ(BaseType::Float)], Some(Type::typ(BaseType::Int))));
     self.function_signatures.insert(String::from("decimal"), (vec![Type::typ(BaseType::Int)], Some(Type::typ(BaseType::Float))));
@@ -582,8 +588,17 @@ fn build_ast_from_for(&self, command: Pairs<Rule>, coords: Coords) -> Result<Ast
 fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
     let coords = coords!(val);
     let v = match val.as_rule() {
-        Rule::integer => Ok(BaseValueType::Int(val.as_str().parse::<i32>().unwrap())),
-        Rule::decimal => Ok(BaseValueType::Float(val.as_str().parse::<f32>().unwrap())),
+        Rule::integer => Ok(BaseValueType::Int(self.parse_integer(val))),
+        Rule::decimal => {
+            let number = match val.as_str().parse::<f32>() {
+                Ok(number) if number.is_finite() => number,
+                _ => {
+                    self.diagnostics.borrow_mut().push(Error::parse(String::from("Float literal must be finite"), coords));
+                    0.0
+                },
+            };
+            Ok(BaseValueType::Float(number))
+        },
         Rule::boolean => Ok(BaseValueType::Bool(val.as_str() == "true")),
         Rule::string_literal => {
             let literal = val.as_str();
@@ -607,8 +622,14 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
             }
             Ok(BaseValueType::StringVal(decoded))
         },
-        Rule::color   => {return self.build_ast_from_color(val);},
-        Rule::key     => {return self.build_ast_from_key(val);},
+        Rule::color => match self.build_ast_from_color(val) {
+            Ok(value) => return Ok(value),
+            Err(error) => { self.diagnostics.borrow_mut().push(error); Ok(BaseValueType::Color(0,0,0,255)) },
+        },
+        Rule::key => match self.build_ast_from_key(val) {
+            Ok(value) => return Ok(value),
+            Err(error) => { self.diagnostics.borrow_mut().push(error); Ok(BaseValueType::Int(0)) },
+        },
         Rule::noun   => Ok(BaseValueType::Id(self.build_ast_from_noun(val)?)),
         Rule::array_literal => {
             let mut elements = vec![];
@@ -625,15 +646,13 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
             let mut iter = val.into_inner().into_iter();
             let name = self.build_ast_from_ident(iter.next().unwrap())?;
             let args = self.build_ast_from_arglist(iter)?;
-            if let Some((_, return_type)) = self.function_signatures.get(&name) {
-                if let Some(typ) = return_type {
-                    Ok(BaseValueType::FunctionCall(name, args, typ.clone()))
-                } else {
-                    Err(Error::type_er(format!("Function {} has no return type", name), coords))
-                }
-            } else {
-                Err(Error::type_er(format!("Unknown function {}", name), coords))
-            }
+            // Name/return-type validation belongs to the semantic checker so
+            // it can inspect every call in an expression, including siblings.
+            // This placeholder is never executable: the checker resolves the
+            // real signature and rejects unknown/void functions first.
+            let typ = self.function_signatures.get(&name)
+                .and_then(|(_, typ)| typ.clone()).unwrap_or(Type::typ(BaseType::Int));
+            Ok(BaseValueType::FunctionCall(name, args, typ))
         }
         _ => return Err(Error::parse(String::from("Expected a value!"), coords!(val)))
     }?;
@@ -643,10 +662,21 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
 fn build_ast_from_simple_value(&self, val: Pair<Rule>) -> Result<SimpleValue, Error> {
     let coords = coords!(val);
     match val.as_rule() {
-        Rule::integer => Ok(SimpleValue{val:SimpleValueType::Int(val.as_str().parse::<i32>().unwrap()), coords: coords}),
+        Rule::integer => Ok(SimpleValue{val:SimpleValueType::Int(self.parse_integer(val)), coords: coords}),
         Rule::noun   => Ok(SimpleValue{val:SimpleValueType::Id(self.build_ast_from_noun(val)?), coords: coords}),
         Rule::function_call => Ok(SimpleValue { val: SimpleValueType::FunctionCall(self.build_ast_from_value(val)?), coords }),
         _ => return Err(Error::parse(String::from("Expected a simple value!"), coords!(val)))
+    }
+}
+
+fn parse_integer(&self, val: Pair<Rule>) -> i32 {
+    match val.as_str().parse::<i32>() {
+        Ok(number) => number,
+        Err(_) => {
+            self.diagnostics.borrow_mut().push(Error::parse(String::from("Integer literal is outside the int range"), coords!(val)));
+            // Positive keeps an invalid array-size literal recoverable too.
+            1
+        },
     }
 }
 

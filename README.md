@@ -183,6 +183,42 @@ or focus the divider and use the arrow keys.
 Strings print without quotes, colors show a swatch, and identical lines in a row collapse
 into one with a ×N count. Each line shows the time since the program started.
 
+### Program input
+
+Typed reads pause the program until the user submits a value in the console:
+
+```
+print("Your name:");
+string name = readString();
+print("Your age:");
+int age = readInt();
+print("Hello", name, "age", age);
+```
+
+- `readInt()` reads an integer from -2147483648 to 2147483647.
+- `readFloat()` reads a finite decimal number, including exponent notation.
+- `readBool()` reads `true` or `false`.
+- `readString()` reads one line, preserving spaces and allowing an empty string.
+- `input()` is an alias for `readInt()`.
+
+All reads take no arguments. Use `print()` before a read to ask a question. Invalid
+input shows a message and lets the user retry. **Stop** cancels pending input.
+Reads work inside expressions, functions, loops, global initializers and canvas event
+handlers. Simultaneous requests are shown in arrival order. The console opens when
+input is requested; closing it or clearing output retains the pending request.
+
+### Verification
+
+After a pause in typing, the editor shows verification problems together in a list
+under the source, with underlines and gutter marks at their locations. Select a problem
+to jump to it. Run also lists compilation errors in the console and starts only when
+verification succeeds. Language changes translate the entire list.
+
+The verifier continues across independent malformed statements and type errors.
+A missing structural delimiter can make later code ambiguous; fix those errors and
+the next check can identify problems in the restored structure. Background checks
+never execute code, evaluate globals or request input.
+
 ### Colors
 
 ```
@@ -463,4 +499,14 @@ canvas renderer, so rebuild after changing Rust code or the backend grammar.
 Run in watch mode (re-runs on file save):
 ```
 npm run test:watch
+```
+
+The real WASM regression checks cover output, verification and input. Build a Node
+WASM package, then run them:
+
+```bash
+wasm-pack build quanta-lang --release --target nodejs --out-dir /tmp/kvanta-runtime-test-pkg
+node tests/runtime/print.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 ```

@@ -70,6 +70,10 @@ consoleResize.id = 'consoleResize';
 resultWrap.append(consoleResize, consolePanel);
 consolePanel.append(consoleToggle, consoleClear, consoleLines);
 consoleLines.setAttribute('role', 'log');
+const consoleInput = document.createElement('div');
+consoleInput.id = 'consoleInput';
+consoleInput.hidden = true;
+consolePanel.append(consoleInput);
 
 const fpsCounter = document.createElement('div');
 fpsCounter.id = 'fpsCounter';

@@ -49,7 +49,7 @@ impl RuntimeError {
 #[wasm_bindgen]
 pub struct CompilationMessage {
     pub error_code: u32,
-    error: Option<RuntimeError>,
+    errors: Vec<RuntimeError>,
     runtime: Option<Runtime>,
     
 }
@@ -69,12 +69,16 @@ impl CompilationMessage {
     }
 
     pub fn get_error(&self) -> RuntimeError {
-        self.error.clone().unwrap()
+        self.errors.first().cloned().unwrap()
+    }
+
+    pub fn get_errors(&self) -> Vec<RuntimeError> {
+        self.errors.clone()
     }
 
     #[wasm_bindgen]
     pub fn get_error_message(&self) -> String {
-        self.error.as_ref().unwrap().error_message.clone()
+        self.errors.first().unwrap().error_message.clone()
     }
 }
 
@@ -83,29 +87,21 @@ impl CompilationMessage {
     pub(crate) fn ok(runtime: Runtime) -> CompilationMessage {
         CompilationMessage {
             error_code: 0,
-            error: None,
+            errors: vec![],
             runtime: Some(runtime),
         }
     }
 
     pub(crate) fn create_error_message(error: Error) -> CompilationMessage {
-        let er_code = match error.error_type {
-            ErrorType::ParseError => {1},
-            ErrorType::LogicError=> {2},
-            ErrorType::TypeError=> {3},
-            ErrorType::RuntimeError=> {4},
-        };
+        Self::diagnostics(vec![error])
+    }
+
+    pub(crate) fn diagnostics(errors: Vec<Error>) -> CompilationMessage {
+        let errors: Vec<_> = errors.into_iter().map(RuntimeError::new).collect();
         CompilationMessage {
-            error_code: er_code,
+            error_code: errors.first().map_or(0, |error| error.error_code),
             runtime: None,
-            error: Some(RuntimeError {
-                error_code: er_code, 
-                error_message: error.message.to_string(), 
-                start_row: error.start.0,
-                start_column: error.start.1,
-                end_row: error.finish.0,
-                end_column: error.finish.1
-            }),
+            errors,
         }
     }
 }

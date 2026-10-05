@@ -10,6 +10,13 @@
  */
 
 export const ERROR_MESSAGES_UK = {
+  "Integer literal is outside the int range": "Ціле число виходить за межі типу int",
+  "Float literal must be finite": "Дробове число має бути скінченним",
+  "{}() takes no arguments": "{0}() не приймає аргументів",
+  "Input handler is not set": "Ввід не підключено",
+  "Input request failed": "Не вдалося отримати ввід",
+  "Input request cancelled": "Ввід скасовано",
+  "Invalid {} input": "Некоректний ввід типу {0}",
   "'{}' cannot be a variable, it is a keyword": "'{0}' не може бути змінною, це ключове слово",
   "'{}' is a keyword, it cannot be a name of a variable": "'{0}' — ключове слово, його не можна взяти за назву змінної",
   "'{}' is a keyword, it cannot be the name of a function": "'{0}' — ключове слово, його не можна взяти за назву функції",

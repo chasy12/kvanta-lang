@@ -6,16 +6,26 @@ use pest_derive::Parser;
 use crate::ast::{builder::AstBuilder, AstProgram};
 pub mod ast;
 pub mod error;
+mod recovery;
+pub use recovery::parse_ast_recovering;
 
 #[derive(Parser)]
 #[grammar = "../grammar/grammar.pest"]
 pub struct QuantaParser;
 
 pub fn parse_ast(source : &str) -> Result<AstProgram, Error> {
+    let (ast, diagnostics) = parse_ast_with_diagnostics(source)?;
+    if let Some(error) = diagnostics.into_iter().next() { Err(error) } else { Ok(ast) }
+}
+
+fn parse_ast_with_diagnostics(source: &str) -> Result<(AstProgram, Vec<Error>), Error> {
     let parsed_doc = QuantaParser::parse(Rule::document, source);
     let mut builder = AstBuilder::new();
     match parsed_doc {
-        Ok(doc) => builder.build_ast_from_doc(doc),
+        Ok(doc) => {
+            let ast = builder.build_ast_from_doc(doc)?;
+            Ok((ast, builder.diagnostics.into_inner()))
+        },
         Err(err) => Err(Error::from_pest_error(err))
     }
 }

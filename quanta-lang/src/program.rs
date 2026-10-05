@@ -11,6 +11,56 @@ pub struct Scope {
     outer_scope: Box<Option<Scope>>,
 }
 
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    fn errors(source: &str) -> Vec<Error> {
+        let ast = quanta_parser::parse_ast(source).unwrap();
+        let mut errors = create_program(ast).verify_all();
+        errors.sort_by_key(|error| (error.start, error.finish));
+        errors.dedup_by(|a, b| a.start == b.start && a.finish == b.finish && a.message == b.message);
+        errors
+    }
+    #[test]
+    fn visits_both_branches_and_later_functions() {
+        let errors = errors("func one() {\n if (1) { int a = true; } else { int b = false; }\n}\nfunc main() {\n int c = true;\n}");
+        assert_eq!(errors.len(), 4, "{:?}", errors);
+    }
+    #[test]
+    fn checks_all_expression_siblings_and_print_arguments() {
+        assert_eq!(errors("circle(missing, absent, 1);").len(), 2);
+        assert_eq!(errors("int a = missing + absent;").len(), 2);
+        assert_eq!(errors("print(missing);").len(), 1);
+        assert_eq!(errors("circle(true, false, 1);").len(), 2);
+    }
+    #[test]
+    fn retains_bad_initializers_declared_types() {
+        let errors = errors("int a = true; int b = false; circle(a,b,2);");
+        assert_eq!(errors.len(), 2, "{:?}", errors);
+    }
+    #[test]
+    fn reports_duplicate_declarations_despite_invalid_initializers() {
+        assert_eq!(errors("int a = 1; int a = missing; int b = true;").len(), 3);
+    }
+    #[test]
+    fn reports_missing_return_despite_unrelated_body_errors() {
+        assert_eq!(errors("func one() -> int { int a = true; } func main() {}").len(), 2);
+    }
+    #[test]
+    fn strict_check_accepts_global_helpers_and_else_returns() {
+        let ast = quanta_parser::parse_ast("global { int n = next(); } func next() -> int { return readInt(); } func main() { print(n); }").unwrap();
+        assert!(create_program(ast).type_check().is_ok());
+        let ast = quanta_parser::parse_ast("func main() -> int { if(true) { print(1); } else { return 2; } return 3; }").unwrap();
+        assert!(create_program(ast).type_check().is_ok());
+    }
+    #[test]
+    fn accepts_global_const_array_copies() {
+        let source = "global { const int first=1; array<int,1> values={first}; } func main(){print(values);}";
+        assert!(errors(source).is_empty());
+        assert!(create_program(quanta_parser::parse_ast(source).unwrap()).type_check().is_ok());
+    }
+}
+
 impl Scope {
     fn get(&self, name: &str) -> Option<&(Type, Expression)> {
         if let Some(var) = self.variables.get(name) {
@@ -143,10 +193,14 @@ pub fn create_program(ast: AstProgram) -> Program {
         ], Some(color_type()))),
         (String::from("print"), (vec![], None)),
         (String::from("input"), (vec![], Some(int_type()))),
+        (String::from("readInt"), (vec![], Some(int_type()))),
+        (String::from("readFloat"), (vec![], Some(float_type()))),
+        (String::from("readBool"), (vec![], Some(Type::typ(Bool)))),
+        (String::from("readString"), (vec![], Some(Type::typ(StringType)))),
         (String::from("output"), (vec![], None)),
     ]), keywords: HashSet::from(["circle", "line", "rectangle", 
                     "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "setFps", "clear", "rgb",
-                    "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output",
+                    "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output", "readInt", "readFloat", "readBool", "readString",
                     "for", "while", "global", "func", "if", "else", "break", "continue", "len",
                     "int", "bool", "color", "float", "string", "array", "Color", "true", "false"
     ].map(|x| String::from(x)))};
@@ -170,6 +224,227 @@ pub fn create_program(ast: AstProgram) -> Program {
 
 
 impl Program {
+
+    /// Inspect independent statements and expression children without changing
+    /// the executable AST. Failed declarations retain their declared type so
+    /// the next use does not produce a misleading undefined-variable error.
+    pub fn verify_all(&mut self) -> Vec<Error> {
+        let mut errors = vec![];
+        match self.lines.clone() {
+            AstProgram::Block(block) => { self.verify_block(block, &mut errors); },
+            AstProgram::Forest((functions, globals)) => {
+                for function in &functions {
+                    self.function_defs.insert(function.name.clone(), (function.args.clone(), function.return_type.clone()));
+                }
+                for (statement, coords) in globals {
+                    if let AstStatement::Init { typ, val, expr } = statement {
+                        let before = errors.len();
+                        self.verify_expr(&expr, &mut errors);
+                        let keyword = self.keywords.contains(&val);
+                        let duplicate = self.contains_key(&val);
+                        if keyword { errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", val), coords)); }
+                        else if duplicate { errors.push(Error::logic(format!("Global variable {} is re-defined!", val), coords)); }
+                        if before == errors.len() {
+                            if let Err(error) = self.type_check_init(typ.clone(), val.clone(), expr.clone(), coords) { errors.push(error); }
+                        }
+                        if !self.keywords.contains(&val) && !self.contains_key(&val) {
+                            self.global_vars.insert(val, (typ, expr));
+                        }
+                    }
+                }
+                for function in functions {
+                    self.verify_header(&function, &mut errors);
+                    let mut sub = self.create_subprogram(None);
+                    for (name, typ) in &function.args {
+                        let placeholder = Expression { expr_type: ExpressionType::Value(BaseValue { val: BaseValueType::Int(0), coords: function.header }), coords: function.header };
+                        sub.scope.variables.insert(name.clone(), (typ.clone(), placeholder));
+                    }
+                    let before = errors.len();
+                    let returned = sub.verify_block(function.block.clone(), &mut errors);
+                    // A missing return caused by an invalid return expression
+                    // is dependent on its already reported error.
+                    if before == errors.len() || returned.t().is_some() || !Self::contains_return(&function.block) {
+                        match (&function.return_type, &returned) {
+                            (Some(expected), ReturnType::Full(actual) | ReturnType::Partial(actual)) if expected != actual => errors.push(Error::logic(format!("Function {} return type mismatch: expected '{}', got '{}'", function.name, expected, actual), function.header)),
+                            (Some(_), ReturnType::Partial(_)) => errors.push(Error::logic(format!("Expected a return statement at the end of function {}", function.name), function.header)),
+                            (Some(expected), ReturnType::None) => errors.push(Error::logic(format!("Function {} has a return type '{}' defined but does not return anything", function.name, expected), function.header)),
+                            (None, ReturnType::Full(actual)) => errors.push(Error::logic(format!("Function {} has no return type defined, but returns {}", function.name, actual), function.header)),
+                            (None, ReturnType::Partial(_)) => errors.push(Error::logic(format!("Function {} has no return type defined", function.name), function.header)),
+                            _ => {},
+                        }
+                    }
+                }
+            },
+        }
+        errors
+    }
+
+    fn verify_header(&self, function: &AstFunction, errors: &mut Vec<Error>) {
+        if self.keywords.contains(&function.name) {
+            errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a function", function.name), function.header));
+        }
+        if self.global_vars.contains_key(&function.name) {
+            errors.push(Error::type_er(format!("{} is a global variable, it cannot be the name of a function", function.name), function.header));
+        }
+        for (name, _) in &function.args {
+            if self.keywords.contains(name) { errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", name), function.header)); }
+            if self.global_vars.contains_key(name) { errors.push(Error::type_er(format!("{} is a global variable, it cannot be the name of a function argument", name), function.header)); }
+        }
+        if function.name == "keyboard" {
+            if function.args.len() != 1 { errors.push(Error::type_er(format!("Special function 'keyboard' has to have exactly 1 argument"), function.header)); }
+            else if function.args[0].1.type_name != Primitive(Int) { errors.push(Error::type_er(format!("Special function 'keyboard' has to receive an integer, but got {}", function.args[0].1), function.header)); }
+        }
+        if function.name == "mouse" {
+            if function.args.len() != 2 { errors.push(Error::type_er(format!("Special function 'mouse' has to have exactly 2 arguments"), function.header)); }
+            else if function.args.iter().any(|(_, typ)| typ.type_name != Primitive(Int)) { errors.push(Error::type_er(format!("Special function 'mouse' has to receive two integers, but got {} and {}", function.args[0].1, function.args[1].1), function.header)); }
+        }
+    }
+
+    fn contains_return(block: &AstBlock) -> bool {
+        block.nodes.iter().any(|node| match &node.statement {
+            AstStatement::Return { .. } => true,
+            AstStatement::If { block, else_block, .. } => Self::contains_return(block) || else_block.as_ref().is_some_and(Self::contains_return),
+            AstStatement::For { block, .. } | AstStatement::While { block, .. } => Self::contains_return(block),
+            _ => false,
+        })
+    }
+
+    fn verify_block(&mut self, block: AstBlock, errors: &mut Vec<Error>) -> ReturnType {
+        let mut returned = ReturnType::None;
+        for node in block.nodes {
+            let mut next_return = ReturnType::None;
+            match node.statement {
+                AstStatement::Command { name, args } => self.verify_call(&name, &args, node.coords, false, errors),
+                AstStatement::Init { typ, val, expr } => {
+                    let before = errors.len();
+                    self.verify_expr(&expr, errors);
+                    let keyword = self.keywords.contains(&val);
+                    let duplicate = self.contains_key(&val);
+                    if keyword { errors.push(Error::type_er(format!("'{}' is a keyword, it cannot be the name of a variable", val), node.coords)); }
+                    else if duplicate { errors.push(Error::logic(format!("Variable {} is re-defined!", val), node.coords)); }
+                    if before == errors.len() {
+                        if let Err(error) = self.type_check_init(typ.clone(), val.clone(), expr.clone(), node.coords) { errors.push(error); }
+                    }
+                    if !keyword && !duplicate {
+                        self.scope.variables.insert(val, (typ, expr));
+                    }
+                },
+                AstStatement::SetVal { val, expr } => {
+                    let before = errors.len();
+                    self.verify_expr(&expr, errors);
+                    if let Err(error) = self.type_check_var(&val, node.coords) { errors.push(error); }
+                    if before == errors.len() {
+                        if let Err(error) = self.type_check_set_val(val, expr, node.coords) { errors.push(error); }
+                    }
+                },
+                AstStatement::If { clause, block, else_block } => {
+                    if let Some(typ) = self.verify_expr(&clause, errors) {
+                        if typ.type_name != Primitive(Bool) { errors.push(Error::logic(format!("If clause must be a bool expression"), clause.coords)); }
+                    }
+                    let mut sub = self.create_subprogram(Some(block.clone()));
+                    let if_return = sub.verify_block(block, errors);
+                    if let Some(other) = else_block {
+                        let mut sub = self.create_subprogram(Some(other.clone()));
+                        let else_return = sub.verify_block(other, errors);
+                        if let (Some(a), Some(b)) = (if_return.t(), else_return.t()) {
+                            if a != b { errors.push(Error::logic(format!("Return type of if and else block must match: '{}' != '{}'", a, b), node.coords)); }
+                        }
+                        next_return = if if_return == else_return { if_return } else { if_return.t().or(else_return.t()).cloned().map_or(ReturnType::None, ReturnType::Partial) };
+                    } else { next_return = if_return.t().cloned().map_or(ReturnType::None, ReturnType::Partial); }
+                },
+                AstStatement::While { clause, block } => {
+                    if let Some(typ) = self.verify_expr(&clause, errors) {
+                        if typ.type_name != Primitive(Bool) { errors.push(Error::logic(format!("While clause must be a bool expression"), clause.coords)); }
+                    }
+                    let mut sub = self.create_subprogram(Some(block.clone()));
+                    next_return = sub.verify_block(block, errors);
+                },
+                AstStatement::For { val, from, to, block } => {
+                    for expr in [&from, &to] {
+                        if let Some(typ) = self.verify_expr(expr, errors) {
+                            if typ.type_name != Primitive(Int) { errors.push(Error::logic(format!("For loop range can only be integer values"), expr.coords)); }
+                        }
+                    }
+                    let mut sub = self.create_subprogram(Some(block.clone()));
+                    sub.scope.variables.insert(val, (Type::typ(Int), from));
+                    next_return = sub.verify_block(block, errors);
+                },
+                AstStatement::Return { expr } => {
+                    if let Some(typ) = self.verify_expr(&expr, errors) { next_return = ReturnType::Full(typ); }
+                },
+            }
+            if let Some(next) = next_return.t() {
+                if let Some(previous) = returned.t() {
+                    if previous != next { errors.push(Error::logic(format!("Return type mismatch: expected '{}', got '{}'", previous, next), node.coords)); }
+                }
+                if !matches!(returned, ReturnType::Full(_)) { returned = next_return; }
+            }
+        }
+        returned
+    }
+
+    fn verify_call(&self, name: &str, args: &[Expression], coords: Coords, value: bool, errors: &mut Vec<Error>) {
+        let types: Vec<_> = args.iter().map(|arg| self.verify_expr(arg, errors)).collect();
+        let Some((params, return_type)) = self.function_defs.get(name) else {
+            errors.push(if value { Error::type_er(format!("Unknown function '{}'", name), coords) } else { Error::logic(format!("Unknown command: {}", name), coords) });
+            return;
+        };
+        if value && return_type.is_none() {
+            errors.push(Error::type_er(format!("Function {} has no return type", name), coords));
+        }
+        if name == "print" || name == "output" { return; }
+        if name == "polygon" {
+            if args.len() < 6 || args.len() % 2 != 0 { errors.push(Error::logic(format!("Wrong number of arguments for command polygon: got {}, expected at least 6 (even number) for polygon", args.len()), coords)); }
+            for (arg, typ) in args.iter().zip(types) {
+                if let Some(typ) = typ { if typ.type_name != Primitive(Int) { errors.push(Error::type_er(format!("Wrong type of argument for command {}: got '{}', expected Int", name, typ), arg.coords)); } }
+            }
+            return;
+        }
+        if params.len() != args.len() {
+            errors.push(if value { Error::type_er(format!("Funcion '{}' expects {} arguments, but got {}", name, params.len(), args.len()), coords) } else { Error::logic(format!("Wrong number of arguments for command '{}': got {}, expected {}", name, args.len(), params.len()), coords) });
+        }
+        for (((param_name, param_type), arg), typ) in params.iter().zip(args).zip(types) {
+            if let Some(typ) = typ {
+                let compatible = if value { param_type.can_assign(&typ) } else { param_type.type_name == typ.type_name };
+                if !compatible {
+                    errors.push(if value { Error::type_er(format!("Funcion '{}' expects argument '{}' of type '{}', but got '{}'", name, param_name, param_type, typ), arg.coords) } else { Error::type_er(format!("Wrong type of argument '{}' for command '{}': got '{}', expected '{}'", param_name, name, typ, param_type), arg.coords) });
+                }
+            }
+        }
+    }
+
+    fn verify_expr(&self, expr: &Expression, errors: &mut Vec<Error>) -> Option<Type> {
+        let before = errors.len();
+        match &expr.expr_type {
+            ExpressionType::Value(value) => { self.verify_value(value, errors); },
+            ExpressionType::Unary(_, inner) => { self.verify_expr(inner, errors); },
+            ExpressionType::Binary(op, lhs, rhs) => {
+                for operand in [lhs.as_ref(), rhs.as_ref()] {
+                    if let Some(typ) = self.verify_expr(operand, errors) {
+                        if *op == Operator::AND || *op == Operator::OR {
+                            if typ.type_name != Primitive(Bool) { errors.push(Error::type_er(format!("Expected bool expression for operator '{:?}', got '{}'", *op, typ), operand.coords)); }
+                        } else if typ.type_name != Primitive(Int) && typ.type_name != Primitive(Float) {
+                            errors.push(Error::type_er(format!("Expected int or float expression for operator '{:?}', got '{}'", *op, typ), operand.coords));
+                        }
+                    }
+                }
+            },
+        }
+        if errors.len() != before { return None; }
+        match self.type_check_expr(expr) {
+            Ok(typ) => Some(typ),
+            Err(error) => { errors.push(error); None },
+        }
+    }
+
+    fn verify_value(&self, value: &BaseValue, errors: &mut Vec<Error>) {
+        match &value.val {
+            BaseValueType::Array(values) => { for value in values { self.verify_value(value, errors); } },
+            BaseValueType::ExpandingArray(value) => self.verify_value(value, errors),
+            BaseValueType::FunctionCall(name, args, _) => self.verify_call(name, args, value.coords, true, errors),
+            _ => { if let Err(error) = self.type_check_baseval(value) { errors.push(error); } },
+        }
+    }
 
     fn get(&self, name: &str) -> Option<&(Type, Expression)> {
         if let Some(var) = self.scope.get(name){
@@ -207,6 +482,11 @@ impl Program {
                 return Ok(return_type);
             }
             AstProgram::Forest(ref forest) => {
+                // Globals may call helpers declared anywhere in the forest.
+                // Validate the headers after global names are registered.
+                for function in &forest.0 {
+                    self.function_defs.insert(function.name.clone(), (function.args.clone(), function.return_type.clone()));
+                }
                 for (astst, (coords)) in &forest.1 {
                     if let AstStatement::Init{typ, val, expr} = astst {
                         let name = val;
@@ -803,7 +1083,10 @@ impl Program {
                 }
                 match self.function_defs.get(name) {
                     None => Err(Error::type_er(format!("Unknown function '{}'", name), base.coords)),
-                    Some((arg_defs, _)) => {
+                    Some((arg_defs, actual_return_type)) => {
+                        let Some(actual_return_type) = actual_return_type else {
+                            return Err(Error::type_er(format!("Function {} has no return type", name), base.coords));
+                        };
                         if arg_list.len() != arg_defs.len() {
                             return Err(Error::type_er(format!("Funcion '{}' expects {} arguments, but got {}", name, arg_defs.len(), arg_list.len()), base.coords))
                         }
@@ -813,7 +1096,7 @@ impl Program {
                                 return Err(Error::type_er(format!("Funcion '{}' expects argument '{}' of type '{}', but got '{}'", name, arg_name, arg_def.to_string(), expr_type.to_string()), base.coords));
                             }
                         } 
-                        Ok(return_type.clone())
+                        Ok(actual_return_type.clone())
                     }
                 }
             }

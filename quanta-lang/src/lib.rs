@@ -46,6 +46,10 @@ impl Compiler {
     pub async fn compile_code(&mut self, source : &str) -> CompilationMessage {
         self.compile(source).await
     }
+
+    pub fn check_code(&self, source: &str) -> CompilationMessage {
+        self.check(source)
+    }
 }
 
 #[test]

@@ -3,7 +3,7 @@ import { EditorView } from '@codemirror/view';
 
 vi.mock('../../quanta-lang/pkg/quanta_lang.js', () => ({
   default: vi.fn().mockResolvedValue(undefined),
-  Compiler: { new: () => ({ compile_code: async () => ({ error_code: 0 }) }) },
+  Compiler: { new: () => ({ check_code: async () => ({ error_code: 0, get_errors: () => [] }) }) },
 }));
 
 it('starts the editor and switches language when storage is blocked', async () => {

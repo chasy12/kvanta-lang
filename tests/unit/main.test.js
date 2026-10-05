@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { diagnosticCount } from '@codemirror/lint';
+import { diagnosticCount, forEachDiagnostic } from '@codemirror/lint';
 
 // ---------------------------------------------------------------------------
 // Module mocks – Vitest hoists these before any imports.
@@ -26,6 +26,7 @@ const mockRuntime = vi.hoisted(() => ({
   execute_key: vi.fn(),
   execute_mouse: vi.fn(),
   set_error_handler: vi.fn(),
+  set_input_handler: vi.fn(),
   get_runtime_error: vi.fn(() => ({ error_code: 0 })),
 }));
 
@@ -34,6 +35,7 @@ vi.mock('../../quanta-lang/pkg/quanta_lang.js', () => {
     default: vi.fn().mockResolvedValue(undefined), // initWasm
     Compiler: {
       new: vi.fn(() => ({
+        check_code: vi.fn().mockResolvedValue({ error_code: 0, get_errors: () => [] }),
         compile_code: vi.fn().mockResolvedValue({
           error_code: 0,
           get_error: vi.fn(),
@@ -67,6 +69,8 @@ import {
   reportError,
   reportMessage,
   showError,
+  showErrors,
+  verifySource,
   showOk,
 } from '../../web/main.js';
 
@@ -590,7 +594,7 @@ describe('runBtn – click handler', () => {
     const view = EditorView.findFromDOM(document.getElementById('editor'));
     const head = view.state.selection.main.head;
     expect(view.state.doc.lineAt(head).number).toBe(2);
-    expect(head - view.state.doc.line(2).from).toBe(3);
+    expect(head - view.state.doc.line(2).from).toBe(2);
   });
 
   it('stops the program and shows the error when an event handler fails', async () => {
@@ -736,5 +740,124 @@ describe('language switch', () => {
   it('remembers the choice', () => {
     setLanguage('uk');
     expect(localStorage.getItem('quanta-language')).toBe('uk');
+  });
+});
+
+
+function diagnosticsOf(state) {
+  const errors = [];
+  forEachDiagnostic(state, (error, from, to) => errors.push({ message: error.message, from, to }));
+  return errors;
+}
+function errorAt(row, start, end, message = 'Division by 0') {
+  return { error_code: 3, start_row: row, start_column: start, end_row: row, end_column: end, get_error_message: () => message };
+}
+
+describe('batch diagnostics', () => {
+  it('marks every error in one update at exact 1-based source coordinates', () => {
+    let state = EditorState.create({ doc: 'bad();\nwrong();' });
+    let updates = 0;
+    const view = { get state() { return state; }, dispatch(spec) { updates++; state = state.update(spec).state; } };
+    showErrors(view, [errorAt(1, 1, 4), errorAt(2, 1, 6)]);
+    expect(updates).toBe(1);
+    expect(diagnosticsOf(state).map(({ from, to }) => [from, to])).toEqual([[0, 3], [7, 12]]);
+  });
+
+  it('maps Unicode scalar columns to UTF-16 without splitting emoji', () => {
+    let state = EditorState.create({ doc: 'print("😀ї"); wrong();' });
+    const view = { get state() { return state; }, dispatch(spec) { state = state.update(spec).state; } };
+    showErrors(view, [errorAt(1, 14, 19)]);
+    const [{ from, to }] = diagnosticsOf(state);
+    expect(state.doc.sliceString(from, to)).toBe('wrong');
+  });
+
+  it('keeps valid errors when another location belongs to an older longer source', () => {
+    let state = EditorState.create({ doc: 'bad();' });
+    const view = { get state() { return state; }, dispatch(spec) { state = state.update(spec).state; } };
+    showErrors(view, [errorAt(20, 1, 5), errorAt(1, 1, 4)]);
+    expect(diagnosticsOf(state).map(({ from, to }) => [from, to])).toEqual([[0, 3]]);
+  });
+
+  it('shows all Run verification errors in the problem list and console', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    const errors = [errorAt(1, 1, 4), errorAt(2, 1, 4)];
+    Compiler.new.mockReturnValueOnce({ compile_code: async () => ({ error_code: 3, get_errors: () => errors }) });
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'bad();\nwrong();' } });
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(document.querySelectorAll('.cm-panel-lint li')).toHaveLength(2));
+    expect((await consoleText()).filter(text => text.includes('Division by 0'))).toHaveLength(2);
+    expect(document.getElementById('runBtn').dataset.state).toBe('run');
+  });
+
+  it('clears successful background checks and ignores results after an edit', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    showErrors(view, [errorAt(1, 1, 2)]);
+    Compiler.new.mockReturnValueOnce({ check_code: async () => ({ error_code: 0, get_errors: () => [] }) });
+    await verifySource(view, view.state.doc.toString());
+    expect(diagnosticCount(view.state)).toBe(0);
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    Compiler.new.mockReturnValueOnce({ check_code: () => pending });
+    const verification = verifySource(view, view.state.doc.toString());
+    await Promise.resolve();
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'print(1);' } });
+    resolve({ error_code: 3, get_errors: () => [errorAt(1, 1, 4)] });
+    await verification;
+    expect(diagnosticCount(view.state)).toBe(0);
+  });
+});
+
+
+describe('runtime input UI', () => {
+  function submit(value) {
+    const host = document.getElementById('consoleInput');
+    host.querySelector('input').value = value;
+    host.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  }
+
+  it('opens a closed console, retains input through Clear and close, and cancels on Stop', async () => {
+    let finish;
+    mockRuntime.execute.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(document.getElementById('runBtn').dataset.state).toBe('stop'));
+    const toggle = document.getElementById('consoleToggle');
+    if (toggle.getAttribute('aria-expanded') === 'true') toggle.click();
+    const handler = mockRuntime.set_input_handler.mock.calls.at(-1)[0];
+    const pending = handler('int');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const field = document.querySelector('#consoleInput input');
+    field.value = '12';
+    document.getElementById('consoleClear').click();
+    toggle.click();
+    toggle.click();
+    expect(field.value).toBe('12');
+    document.getElementById('runBtn').click();
+    await expect(pending).resolves.toBeNull();
+    expect(document.getElementById('consoleInput').hidden).toBe(true);
+    finish();
+    await Promise.resolve();
+  });
+
+  it('keeps Stop available for pending event input when main finishes', async () => {
+    let finish;
+    mockRuntime.execute.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    document.getElementById('runBtn').click();
+    await vi.waitFor(() => expect(document.getElementById('runBtn').dataset.state).toBe('stop'));
+    const handler = mockRuntime.set_input_handler.mock.calls.at(-1)[0];
+    const pending = handler('string');
+    finish();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(document.getElementById('runBtn').dataset.state).toBe('stop');
+    submit('event');
+    await expect(pending).resolves.toBe('event');
+    expect(document.getElementById('runBtn').dataset.state).toBe('run');
+    const later = handler('bool');
+    expect(document.getElementById('runBtn').dataset.state).toBe('stop');
+    document.getElementById('runBtn').click();
+    await expect(later).resolves.toBeNull();
+    await expect(handler('int')).resolves.toBeNull();
+    expect(document.getElementById('consoleInput').hidden).toBe(true);
   });
 });
