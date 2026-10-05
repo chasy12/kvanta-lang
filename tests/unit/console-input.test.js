@@ -111,4 +111,63 @@ describe('console input', () => {
     submit('5');
     await expect(value).resolves.toBe('5');
   });
+
+  it('reads one mixed-type row without changing the submitted text', async () => {
+    const value = input.request(['int', 'float', 'bool']);
+    expect(host.textContent).toContain('int float bool');
+    submit(' 10\u00852.5 true ');
+    await expect(value).resolves.toBe(' 10\u00852.5 true ');
+    expect(host.hidden).toBe(true);
+  });
+
+  it('requires the exact number of row values before submission resolves', async () => {
+    const value = input.request(['int', 'float']);
+    let settled = false;
+    value.then(() => { settled = true; });
+    for (const [raw, count] of [['', 0], ['10', 1], ['10 2.5 3', 3]]) {
+      submit(raw);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(field().getAttribute('aria-invalid')).toBe('true');
+      expect(host.textContent).toContain(`Expected 2 values, got ${count}`);
+    }
+    submit('10 2.5');
+    await expect(value).resolves.toBe('10 2.5');
+  });
+
+  it('identifies an invalid row value and translates the retry message', async () => {
+    const value = input.request(['int', 'float', 'bool']);
+    submit('10 Infinity true');
+    expect(host.textContent).toContain('Value 2: Enter a finite decimal number');
+    setLanguage('uk');
+    input.refresh();
+    expect(field().value).toBe('10 Infinity true');
+    expect(host.textContent).toContain('Значення 2: Введіть скінченне дробове число');
+    submit('10 2.5 yes');
+    expect(host.textContent).toContain('Значення 3: Введіть true або false');
+    submit('10 2.5 true');
+    await expect(value).resolves.toBe('10 2.5 true');
+  });
+
+  it('queues row requests with scalar requests and cancels them together', async () => {
+    const row = input.request(['int', 'float']);
+    const text = input.request('string');
+    submit('10 2.5');
+    await expect(row).resolves.toBe('10 2.5');
+    expect(host.textContent).toContain('string');
+    expect(field().value).toBe('');
+    const next = input.request(['int', 'bool']);
+    input.cancel();
+    await expect(text).resolves.toBeNull();
+    await expect(next).resolves.toBeNull();
+    expect(host.hidden).toBe(true);
+  });
+
+  it('rejects empty, unknown and multi-string request descriptors', async () => {
+    for (const kinds of [[], ['color'], ['int', 'string']]) {
+      await expect(input.request(kinds)).rejects.toThrow();
+    }
+    expect(host.hidden).toBe(true);
+  });
+
 });

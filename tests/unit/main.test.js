@@ -790,6 +790,24 @@ describe('batch diagnostics', () => {
     expect(document.getElementById('runBtn').dataset.state).toBe('run');
   });
 
+  it('retains runtime error marks when a background check finishes later', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    let resolve;
+    Compiler.new.mockReturnValueOnce({ check_code: () => new Promise(done => { resolve = done; }) });
+    const verification = verifySource(view, view.state.doc.toString());
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
+    showError(view, { ...errorAt(1, 1, 4), error_code: 4 });
+    resolve({ error_code: 0, get_errors: () => [] });
+    await verification;
+    expect(diagnosticCount(view.state)).toBe(1);
+    await verifySource(view, view.state.doc.toString());
+    expect(diagnosticCount(view.state)).toBe(1);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'print(1);' } });
+    await verifySource(view, view.state.doc.toString());
+    expect(diagnosticCount(view.state)).toBe(0);
+  });
+
   it('clears successful background checks and ignores results after an edit', async () => {
     const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
     const view = EditorView.findFromDOM(document.getElementById('editor'));

@@ -166,6 +166,7 @@ const newlineSameIndent = keymap.of([{
 
 /** Errors retained so the entire list follows a language change. */
 let shownErrors = [];
+let diagnosticDocument = null;
 
 /** Map the compiler's 1-based Unicode columns to CodeMirror's UTF-16 offsets. */
 function sourceOffset(doc, row, column) {
@@ -175,6 +176,7 @@ function sourceOffset(doc, row, column) {
 }
 
 export function showErrors(editor, errors) {
+  diagnosticDocument = editor.state.doc;
   shownErrors = errors.filter(err => err.start_row <= editor.state.doc.lines && err.end_row <= editor.state.doc.lines);
   const diagnostics = shownErrors.map(err => {
     const from = sourceOffset(editor.state.doc, err.start_row, err.start_column);
@@ -226,6 +228,7 @@ function jumpTo(row, column) {
  */
 export function showOk(editor) {
   shownErrors = [];
+  diagnosticDocument = null;
   editor.dispatch(setDiagnostics(editor.state, []));
 }
 
@@ -286,6 +289,8 @@ export async function verifySource(view, src) {
   try {
     const result = await compiler.check_code(src);
     if (view.state.doc !== document) return;
+    // A static check cannot clear a runtime failure on the same source.
+    if (diagnosticDocument === document && shownErrors.some(error => error.error_code === 4)) return;
     showErrors(view, compilationErrors(result));
   } finally {
     compiler.free?.();
@@ -308,6 +313,7 @@ let typingTimer = null;
 const onTyping = EditorView.updateListener.of(update => {
   if (update.docChanged) {
     shownErrors = [];
+    diagnosticDocument = null;
     update.view.dispatch(setDiagnostics(update.state, []));
     // Once the shared program is edited it is the user's own: drop the link
     // from the address bar so a reload shows the saved edits.
