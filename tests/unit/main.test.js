@@ -8,11 +8,12 @@
  * • All required DOM elements (runBtn, editor, resizer, …) are pre-created
  *   in tests/setup.js, which runs before the module is imported.
  * • Exported utilities (fontSizeTheme, downloadFile, reportError,
- *   reportMessage, hideErrorBar, showError, showOk) are imported and tested directly.
+ *   reportMessage, showError, showOk) are imported and tested directly.
  * • DOM event handlers are exercised by dispatching events on the real elements.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { diagnosticCount } from '@codemirror/lint';
 
 // ---------------------------------------------------------------------------
 // Module mocks – Vitest hoists these before any imports.
@@ -24,6 +25,7 @@ const mockRuntime = vi.hoisted(() => ({
   stop: vi.fn(),
   execute_key: vi.fn(),
   execute_mouse: vi.fn(),
+  set_error_handler: vi.fn(),
   get_runtime_error: vi.fn(() => ({ error_code: 0 })),
 }));
 
@@ -49,6 +51,7 @@ vi.mock('../../web/canvas-runtime.js', () => ({
   checkIsCancelled: vi.fn(() => false),
   cancelNow: vi.fn(),
   setIsSafari: vi.fn(),
+  setPrintHandler: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -63,12 +66,21 @@ import {
   downloadFile,
   reportError,
   reportMessage,
-  hideErrorBar,
   showError,
   showOk,
 } from '../../web/main.js';
 
-import { setup, cancelNow, drawCommands, isAnimationMode } from '../../web/canvas-runtime.js';
+import { setup, cancelNow, drawCommands, isAnimationMode, setPrintHandler } from '../../web/canvas-runtime.js';
+import { setLanguage } from '../../web/i18n.js';
+
+/** The print() handler main.js registered on load (captured before mocks are cleared). */
+const printHandler = setPrintHandler.mock.calls[0]?.[0];
+
+/** Text of each console line, once pending lines are drawn. */
+async function consoleText() {
+  await Promise.resolve();
+  return [...document.getElementById('consoleLines').children].map(li => li.textContent);
+}
 
 // ============================================================
 // fontSizeTheme
@@ -155,14 +167,12 @@ describe('downloadFile', () => {
 });
 
 // ============================================================
-// reportError / reportMessage / hideErrorBar
+// reportError / reportMessage
 // ============================================================
 
 describe('reportError', () => {
-  let logSpy;
-  const errorBar = () => document.getElementById('errorBar');
-
   const makeErr = (msg = 'bad token', sr = 2, sc = 4, er = 2, ec = 9) => ({
+    error_code: 4,
     start_row: sr,
     start_column: sc,
     end_row: er,
@@ -170,26 +180,13 @@ describe('reportError', () => {
     get_error_message: () => msg,
   });
 
-  beforeEach(() => {
-    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    hideErrorBar();
-  });
+  beforeEach(() => document.getElementById('consoleClear').click());
 
-  afterEach(() => {
-    logSpy.mockRestore();
-    hideErrorBar();
-  });
-
-  it('logs the message with row and column to the console', () => {
-    reportError(makeErr('x', 3, 7, 3, 12));
-    expect(logSpy).toHaveBeenCalledOnce();
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('x at 3:7'));
-  });
-
-  it('shows the line and message in the error bar', () => {
-    reportError(makeErr('syntax error', 5, 12, 5, 15));
-    expect(errorBar().hidden).toBe(false);
-    expect(errorBar().textContent).toBe('Line 5: syntax error');
+  it('shows the line, kind and message in the console', async () => {
+    reportError(makeErr('Division by 0', 5, 12, 5, 15));
+    const [line] = await consoleText();
+    expect(line).toContain('Line 5');
+    expect(line).toContain('Runtime error: Division by 0');
   });
 
   it('does not open a native alert', () => {
@@ -199,17 +196,17 @@ describe('reportError', () => {
     alertSpy.mockRestore();
   });
 
-  it('reportMessage shows text without a location', () => {
-    reportError(makeErr());
-    reportMessage('Error: boom');
-    expect(errorBar().textContent).toBe('Error: boom');
-    expect(errorBar().dataset.row).toBeUndefined();
+  it('reportMessage shows text without a line', async () => {
+    reportMessage('boom');
+    const [line] = await consoleText();
+    expect(line).toContain('Error: boom');
+    expect(document.querySelector('.console__loc')).toBeNull();
   });
 
-  it('hideErrorBar hides the bar', () => {
-    reportMessage('Error: boom');
-    hideErrorBar();
-    expect(errorBar().hidden).toBe(true);
+  it('the Clear button empties the console', async () => {
+    reportMessage('boom');
+    document.getElementById('consoleClear').click();
+    expect(await consoleText()).toEqual([]);
   });
 });
 
@@ -539,9 +536,7 @@ describe('runBtn – click handler', () => {
     isAnimationMode.mockReturnValue(false);
   });
 
-  it('shows the runtime error in the error bar once the program finishes with one', async () => {
-    const errorBar = document.getElementById('errorBar');
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+  it('shows the runtime error in the console once the program finishes with one', async () => {
     mockRuntime.get_runtime_error.mockReturnValueOnce({
       error_code: 4,
       start_row: 1, start_column: 0, end_row: 1, end_column: 1,
@@ -550,34 +545,122 @@ describe('runBtn – click handler', () => {
 
     document.getElementById('runBtn').click();
     await vi.waitFor(
-      () => expect(errorBar.textContent).toBe('Line 1: Division by 0'),
+      async () => expect((await consoleText()).at(-1)).toContain('Line 1Runtime error: Division by 0'),
       { timeout: 2000 },
     );
-    expect(errorBar.hidden).toBe(false);
-    vi.restoreAllMocks();
   });
 
-  it('hides the previous error when the program is run again', async () => {
-    const errorBar = document.getElementById('errorBar');
-    reportMessage('Error: old');
+  it('notes the start and the duration of a run that finishes', async () => {
+    document.getElementById('runBtn').click();
+    await vi.waitFor(
+      async () => expect((await consoleText()).at(-1)).toMatch(/Finished in \d+ ms$/),
+      { timeout: 2000 },
+    );
+    expect((await consoleText())[0]).toContain('Program started');
+  });
+
+  it('sends print() output to the console', async () => {
+    expect(printHandler).toBeTypeOf('function');
+    document.getElementById('consoleClear').click();
+    printHandler('hello');
+    printHandler('hello');
+    const [line] = await consoleText();
+    expect(line).toContain('hello');
+    expect(line).toContain('×2');
+  });
+
+  it('clears the previous output when the program is run again', async () => {
+    reportMessage('old');
     document.getElementById('runBtn').click();
     await vi.waitFor(() => expect(setup).toHaveBeenCalled(), { timeout: 2000 });
-    expect(errorBar.hidden).toBe(true);
+    expect((await consoleText()).join()).not.toContain('old');
   });
 
-  it('moves the cursor to the error when the error bar is clicked', () => {
-    const errorBar = document.getElementById('errorBar');
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+  it('moves the cursor to the error when its line is clicked', async () => {
+    document.getElementById('consoleClear').click();
     reportError({
+      error_code: 2,
       start_row: 2, start_column: 3, end_row: 2, end_column: 4,
       get_error_message: () => 'oops',
     });
-    errorBar.click();
+    await consoleText();
+    document.querySelector('.console__loc').click();
     const view = EditorView.findFromDOM(document.getElementById('editor'));
     const head = view.state.selection.main.head;
     expect(view.state.doc.lineAt(head).number).toBe(2);
     expect(head - view.state.doc.line(2).from).toBe(3);
-    vi.restoreAllMocks();
+  });
+
+  it('stops the program and shows the error when an event handler fails', async () => {
+    const runBtn = document.getElementById('runBtn');
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {})); // keeps running
+    runBtn.click();
+    await vi.waitFor(() => expect(runBtn.dataset.state).toBe('stop'), { timeout: 2000 });
+
+    const onError = mockRuntime.set_error_handler.mock.calls.at(-1)[0];
+    onError({
+      error_code: 4,
+      start_row: 3, start_column: 0, end_row: 3, end_column: 1,
+      get_error_message: () => 'Division by 0',
+    });
+
+    expect(mockRuntime.stop).toHaveBeenCalled();
+    expect(runBtn.dataset.state).toBe('run');
+    const lines = await consoleText();
+    expect(lines.at(-1)).toContain('Division by 0');
+    expect(lines.join()).not.toContain('Stopped');
+  });
+
+  it('reports and stops a handler error after the source is shortened', async () => {
+    const runBtn = document.getElementById('runBtn');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    const original = view.state.doc.toString();
+    try {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length,
+        insert: 'func mouse(int x, int y) {\n int z = 1 / 0;\n}\nfunc main() { while (true) {} }' } });
+      mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+      runBtn.click();
+      await vi.waitFor(() => expect(runBtn.dataset.state).toBe('stop'));
+      const onError = mockRuntime.set_error_handler.mock.calls.at(-1)[0];
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'print(1);' } });
+      expect(() => onError({
+        error_code: 4, start_row: 2, start_column: 4, end_row: 2, end_column: 18,
+        get_error_message: () => 'Division by 0',
+      })).not.toThrow();
+      expect(mockRuntime.stop).toHaveBeenCalled();
+      expect(runBtn.dataset.state).toBe('run');
+      expect((await consoleText()).at(-1)).toContain('Line 2Runtime error: Division by 0');
+      expect(diagnosticCount(view.state)).toBe(0);
+      expect(() => setLanguage('uk')).not.toThrow();
+    } finally {
+      setLanguage('en');
+      if (runBtn.dataset.state === 'stop') runBtn.click();
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: original } });
+    }
+  });
+
+  it('reports and stops even when highlighting an event error fails', async () => {
+    const runBtn = document.getElementById('runBtn');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+    runBtn.click();
+    await vi.waitFor(() => expect(runBtn.dataset.state).toBe('stop'));
+    const onError = mockRuntime.set_error_handler.mock.calls.at(-1)[0];
+    const spy = vi.spyOn(view, 'dispatch').mockImplementationOnce(() => {
+      throw new Error('highlight failed');
+    });
+    try {
+      expect(() => onError({
+        error_code: 4, start_row: 1, start_column: 0, end_row: 1, end_column: 1,
+        get_error_message: () => 'Division by 0',
+      })).toThrow('highlight failed');
+      expect(mockRuntime.stop).toHaveBeenCalled();
+      expect(runBtn.dataset.state).toBe('run');
+      expect((await consoleText()).at(-1)).toContain('Division by 0');
+    } finally {
+      spy.mockRestore();
+      if (runBtn.dataset.state === 'stop') runBtn.click();
+    }
   });
 
   it('stops the runtime and restores the Run button when Stop is clicked', async () => {
@@ -591,5 +674,38 @@ describe('runBtn – click handler', () => {
     expect(mockRuntime.stop).toHaveBeenCalled();
     expect(cancelNow).toHaveBeenCalledWith();
     expect(runBtn.dataset.state).toBe('run');
+    expect((await consoleText()).at(-1)).toContain('Stopped');
+  });
+});
+
+// ============================================================
+// Language switch
+// ============================================================
+
+describe('language switch', () => {
+  afterEach(() => setLanguage('en'));
+
+  it('translates the buttons, the console and errors to Ukrainian', async () => {
+    const runBtn = document.getElementById('runBtn');
+    document.getElementById('consoleClear').click();
+    reportError({
+      error_code: 4,
+      start_row: 1, start_column: 0, end_row: 1, end_column: 1,
+      get_error_message: () => 'Division by 0',
+    });
+    await consoleText();
+
+    document.querySelector('[data-lang="uk"]').click();
+
+    expect(runBtn.textContent).toBe('Запустити програму!');
+    expect(document.documentElement.lang).toBe('uk');
+    expect(document.querySelector('[data-lang="uk"]').getAttribute('aria-pressed')).toBe('true');
+    expect((await consoleText())[0]).toContain('Рядок 1');
+    expect((await consoleText())[0]).toContain('Помилка виконання: Ділення на 0');
+  });
+
+  it('remembers the choice', () => {
+    setLanguage('uk');
+    expect(localStorage.getItem('quanta-language')).toBe('uk');
   });
 });

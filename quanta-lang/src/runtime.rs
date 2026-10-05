@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
-use quanta_parser::{ast::keys::key_to_number};
+use quanta_parser::{ast::keys::key_to_number, error::Error};
 
 use crate::{execution::{pack_color, Execution, Scope}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler}};
 
@@ -16,6 +16,7 @@ pub struct Runtime {
     canvas: Canvas,
     scheduler: Scheduler,
     runtime_error: Arc<Mutex<RuntimeError>>,
+    error_handler: Arc<Mutex<Option<js_sys::Function>>>,
 }
 
 
@@ -57,34 +58,32 @@ impl Runtime {
         self.canvas.set_renderer(None);
     }
 
+    /// Sets the JS function `(error: RuntimeError) => void` called when a
+    /// `keyboard` or `mouse` handler fails.
+    pub fn set_error_handler(&self, handler: js_sys::Function) {
+        *self.error_handler.lock().unwrap() = Some(handler);
+    }
+
     pub fn execute_key(&self, key: String) {
         if let Some(key_code) = key_to_number(key.as_str()) {
             if let Some(exec) = self.key_execution.clone() {
-                    spawn_local(async move {
-                    match exec.clone().execute_key(key_code).await {
-                    Ok(_) => exec.canvas.flush(false),
-                    Err(_) if exec.scheduler.is_cancelled() => {},
-                    Err(err) => {
-                        panic!("Got error: {}", err);
-                    }
-                }
+                let error_handler = Arc::clone(&self.error_handler);
+                spawn_local(async move {
+                    let result = exec.clone().execute_key(key_code).await;
+                    Self::finish_handler(&exec, result, &error_handler);
                 })
-            }   
+            }
         }
     }
 
     pub fn execute_mouse(&self, x: i32, y:i32) {
         if let Some(exec) = self.mouse_execution.clone() {
-                spawn_local(async move {
-                match exec.clone().execute_mouse(x, y).await {
-                Ok(_) => exec.canvas.flush(false),
-                Err(_) if exec.scheduler.is_cancelled() => {},
-                Err(err) => {
-                    panic!("Got error: {}", err);
-                }
-            }
+            let error_handler = Arc::clone(&self.error_handler);
+            spawn_local(async move {
+                let result = exec.clone().execute_mouse(x, y).await;
+                Self::finish_handler(&exec, result, &error_handler);
             })
-        }   
+        }
     }
 
     pub fn get_runtime_error(&self) -> RuntimeError {
@@ -93,6 +92,21 @@ impl Runtime {
 }
 
 impl Runtime {
+    /// Shows what an event handler drew, or reports its error.
+    fn finish_handler(exec: &Execution, result: Result<(), Error>, error_handler: &Arc<Mutex<Option<js_sys::Function>>>) {
+        match result {
+            Ok(_) => exec.canvas.flush(false),
+            Err(_) if exec.scheduler.is_cancelled() => {},
+            Err(err) => {
+                exec.canvas.flush(false);
+                let handler = error_handler.lock().unwrap().clone();
+                if let Some(handler) = handler {
+                    let _ = handler.call1(&JsValue::NULL, &JsValue::from(RuntimeError::new(err)));
+                }
+            }
+        }
+    }
+
     pub async fn new(prog : Program, canvas: Canvas) -> Runtime {
         //let exec = Execution::from_program(prog.clone(), canv);
         let global_vars = Arc::new(Mutex::new(HashMap::new()));
@@ -154,6 +168,7 @@ impl Runtime {
             canvas,
             scheduler,
             runtime_error: Arc::new(Mutex::new(runtime_error)),
+            error_handler: Arc::new(Mutex::new(None)),
         }
     }
 }

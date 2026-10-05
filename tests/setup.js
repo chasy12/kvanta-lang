@@ -7,10 +7,6 @@ canvas.width = 1000;
 canvas.height = 1000;
 document.body.appendChild(canvas);
 
-const logs = document.createElement('div');
-logs.id = 'logs';
-document.body.appendChild(logs);
-
 // --------------------------------------------------------------------------
 // DOM elements required by web/main.js at module load time.
 // --------------------------------------------------------------------------
@@ -47,10 +43,20 @@ const shareBtn = document.createElement('button');
 shareBtn.id = 'shareBtn';
 document.body.appendChild(shareBtn);
 
-const errorBar = document.createElement('div');
-errorBar.id = 'errorBar';
-errorBar.hidden = true;
-document.body.appendChild(errorBar);
+const consoleLines = document.createElement('ol');
+consoleLines.id = 'consoleLines';
+consoleLines.dataset.i18nEmpty = 'consoleEmpty';
+document.body.appendChild(consoleLines);
+
+const consoleClear = document.createElement('button');
+consoleClear.id = 'consoleClear';
+document.body.appendChild(consoleClear);
+
+for (const lang of ['en', 'uk']) {
+  const button = document.createElement('button');
+  button.dataset.lang = lang;
+  document.body.appendChild(button);
+}
 
 const fpsCounter = document.createElement('div');
 fpsCounter.id = 'fpsCounter';

@@ -5,7 +5,7 @@
  * in tests/setup.js which runs before any module is imported.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { drawCommands, cancelNow, colorToCss, isAnimationMode, OP } from '../../web/canvas-runtime.js';
+import { drawCommands, cancelNow, colorToCss, isAnimationMode, setPrintHandler, OP } from '../../web/canvas-runtime.js';
 
 const bufferCtx = globalThis.__mockBufferCtx;
 const drawCtx = globalThis.__mockDrawCtx;
@@ -154,11 +154,19 @@ describe('drawCommands – clear', () => {
 // print
 // ---------------------------------------------------------------------------
 describe('drawCommands – print', () => {
-  it('logs the referenced message to the console', () => {
+  it('logs the referenced text to the browser console by default', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     draw([OP.PRINT, 1], { strings: ['first', 'hello world'] });
-    expect(spy).toHaveBeenCalledWith('Print:hello world');
+    expect(spy).toHaveBeenCalledWith('hello world');
     spy.mockRestore();
+  });
+
+  it('passes each text to the print handler in order', () => {
+    const printed = [];
+    setPrintHandler(text => printed.push(text));
+    draw([OP.PRINT, 0, OP.CIRCLE, 1, 2, 3, OP.PRINT, 1], { strings: ['a', 'b'] });
+    expect(printed).toEqual(['a', 'b']);
+    setPrintHandler(text => console.log(text));
   });
 });
 

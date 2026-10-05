@@ -14,8 +14,10 @@ circle(500, 500, 200);
 
 Run the above directly — no functions needed for simple scripts.
 
-Errors appear in a bar under the editor; click it to jump to the line. **Share** copies a
-link that opens the current program, so you can send a drawing to someone.
+Output of `print(...)` and any errors appear in the console under the canvas; click an
+error's line number to jump to it. **Share** copies a link that opens the current program,
+so you can send a drawing to someone. The **EN / УК** switch changes the interface and error
+messages between English and Ukrainian.
 
 ## Language Features
 
@@ -167,6 +169,15 @@ int score = 42;
 print("Score:", score, true); // Console: Print:Score: 42 true
 text(100, 100, {1, 2, 3});    // Canvas: {1, 2, 3}
 ```
+### Console Output
+
+```
+print("Hello!");                    -- prints a line in the console
+print("x =", x, "y =", y);          -- any number of values of any type, joined by spaces
+```
+
+Strings print without quotes, colors show a swatch, and identical lines in a row collapse
+into one with a ×N count. Each line shows the time since the program started.
 
 ### Colors
 
@@ -399,6 +410,9 @@ kvanta-lang/
 ├── web/                     # Frontend IDE
 │   ├── main.js              # Editor setup, WASM integration
 │   ├── canvas-runtime.js    # Canvas drawing API
+│   ├── console-panel.js     # Console: print() output, run status, errors
+│   ├── i18n.js              # English / Ukrainian interface strings
+│   ├── error-messages.js    # Ukrainian translations of compiler/runtime errors
 │   ├── fps-counter.js       # Frame rate readout in animate mode
 │   ├── share-link.js        # Programs encoded in #code= links
 │   └── quanta-support.ts    # CodeMirror language support
@@ -416,6 +430,13 @@ kvanta-lang/
 - **CodeMirror 6** — code editor with syntax highlighting and autocomplete
 - **Vite** — frontend build tool and dev server
 - **HTML5 Canvas** — rendering target
+
+## Translations
+
+Interface strings live in `web/i18n.js`. Compiler and runtime error messages are
+translated in `web/error-messages.js`, keyed by the Rust format string. When you add or
+change an error message in the Rust sources, add its Ukrainian translation there:
+`npm test` fails and lists any message without one.
 
 ## Running web runtime tests
 

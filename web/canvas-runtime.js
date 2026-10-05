@@ -15,7 +15,6 @@
 
 import { CANVAS_W, CANVAS_H, deg2rad } from './canvas-utils.js';
 
-const logEl      = document.getElementById('logs');
 const drawCanvas = document.getElementById('canvas');
 const drawCtx    = drawCanvas.getContext('2d', { alpha: false });
 
@@ -46,15 +45,16 @@ ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Receives the text of each `print()`; the browser console until `setPrintHandler`. */
+let printHandler = (text) => console.log(text);
+
 /**
- * Write a message to the on-page log element.
- * Non-string values are coerced with `String()`.
+ * Set the function that shows `print()` output.
  *
- * @param {*} text - Message to display.
+ * @param {(text: string) => void} handler
  */
-export function log(text) {
-  if (typeof text !== 'string') text = String(text);
-  logEl.textContent = text;
+export function setPrintHandler(handler) {
+  printHandler = handler;
 }
 
 /**
@@ -241,7 +241,7 @@ export function drawCommands(ops, strings, present = false) {
         break;
       }
       case OP.PRINT:
-        console.log('Print:' + strings[ops[i + 1]]);
+        printHandler(strings[ops[i + 1]]);
         i += 2;
         break;
       case OP.TEXT: {
