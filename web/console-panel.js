@@ -66,9 +66,9 @@ function appendPrinted(parent, text) {
  * Create the console in the list element `el`.
  *
  * @param {HTMLElement} el
- * @param {{ onJump?: (row: number, column: number) => void, maxEntries?: number, now?: () => number }} [options]
+ * @param {{ onJump?: (row: number, column: number) => void, maxEntries?: number, now?: () => number, onActivity?: (kind: string) => void }} [options]
  */
-export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = () => performance.now() } = {}) {
+export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = () => performance.now(), onActivity = () => {} } = {}) {
   /** @type {Array<{ kind: string, time: number, text?: string, count?: number, key?: string, params?: any[], code?: number, message?: string, row?: number, column?: number, node?: HTMLElement }>} */
   let entries = [];
   let startedAt = now();
@@ -138,7 +138,7 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
     stale.clear();
     const fresh = entries.filter(entry => !entry.node);
     if (fresh.length) el.append(...fresh.map(renderEntry));
-    if (follow) el.scrollTop = el.scrollHeight;
+    if (follow && !el.hidden) el.scrollTop = el.scrollHeight;
   }
 
   function schedule() {
@@ -156,6 +156,7 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
       stale.delete(removed);
     }
     schedule();
+    if (entry.kind !== 'info') onActivity(entry.kind);
   }
 
   return {
@@ -169,6 +170,7 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
       const last = entries[entries.length - 1];
       if (last?.kind === 'print' && last.text === text) {
         last.count += 1;
+        onActivity('print');
         if (last.node) stale.add(last);
         schedule();
         return;

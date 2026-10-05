@@ -62,6 +62,7 @@ describe('error translations', () => {
 
 describe('translateError', () => {
   it('leaves English messages unchanged', () => {
+    setLanguage('en');
     expect(translateError('Division by 0')).toBe('Division by 0');
   });
 
@@ -104,6 +105,7 @@ describe('translateError', () => {
 
 describe('t', () => {
   it('fills in values', () => {
+    setLanguage('en');
     expect(t('line', 7)).toBe('Line 7');
     setLanguage('uk');
     expect(t('line', 7)).toBe('Рядок 7');
@@ -114,6 +116,7 @@ describe('t', () => {
   });
 
   it('names error kinds', () => {
+    setLanguage('en');
     expect(errorKind(1)).toBe('Syntax error');
     expect(errorKind(4)).toBe('Runtime error');
     setLanguage('uk');
@@ -141,15 +144,21 @@ describe('language on reload', () => {
     expect(i18n.getLanguage()).toBe('uk');
   });
 
-  it('uses Ukrainian browser language when the saved choice is invalid', async () => {
+  it('preserves a saved English preference', async () => {
+    localStorage.setItem('quanta-language', 'en');
+    const i18n = await import('../../web/i18n.js');
+    expect(i18n.getLanguage()).toBe('en');
+  });
+
+  it('uses Ukrainian when the saved choice is invalid', async () => {
     localStorage.setItem('quanta-language', 'invalid');
-    vi.spyOn(navigator, 'language', 'get').mockReturnValue('uk-UA');
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
     const i18n = await import('../../web/i18n.js');
     expect(i18n.getLanguage()).toBe('uk');
   });
 
-  it('follows Ukrainian browser language on the first visit', async () => {
-    vi.spyOn(navigator, 'language', 'get').mockReturnValue('uk-UA');
+  it('defaults to Ukrainian even with an English browser', async () => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
     const i18n = await import('../../web/i18n.js');
     expect(i18n.getLanguage()).toBe('uk');
   });
@@ -161,7 +170,7 @@ describe('language on reload', () => {
       setItem() { throw new Error('storage blocked'); },
     });
     const i18n = await import('../../web/i18n.js');
-    expect(i18n.getLanguage()).toBe('en');
+    expect(i18n.getLanguage()).toBe('uk');
     expect(() => i18n.setLanguage('uk')).not.toThrow();
     expect(i18n.t('run')).toBe('Запустити програму!');
   });

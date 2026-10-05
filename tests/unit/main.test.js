@@ -77,6 +77,8 @@ import { setLanguage } from '../../web/i18n.js';
 const printHandler = setPrintHandler.mock.calls[0]?.[0];
 
 /** Text of each console line, once pending lines are drawn. */
+beforeEach(() => setLanguage('en'));
+
 async function consoleText() {
   await Promise.resolve();
   return [...document.getElementById('consoleLines').children].map(li => li.textContent);
@@ -681,6 +683,33 @@ describe('runBtn – click handler', () => {
 // ============================================================
 // Language switch
 // ============================================================
+
+describe('console controls', () => {
+  it('keeps hidden output and errors indicated until the console is opened', async () => {
+    const toggle = document.getElementById('consoleToggle');
+    toggle.click();
+    try {
+      printHandler('hidden output');
+      expect(toggle.dataset.activity).toBe('print');
+      reportError({
+        error_code: 4, start_row: 1, start_column: 0, end_row: 1, end_column: 1,
+        get_error_message: () => 'Division by 0',
+      });
+      setLanguage('uk');
+      expect(toggle.dataset.activity).toBe('error');
+      expect(toggle.getAttribute('aria-label')).toContain('нові помилки');
+      expect(document.getElementById('consoleLines').hidden).toBe(true);
+      toggle.click();
+      expect(toggle.dataset.activity).toBe('');
+      expect(document.getElementById('consoleLines').hidden).toBe(false);
+      expect((await consoleText()).join()).toContain('hidden output');
+      expect((await consoleText()).join()).toContain('Ділення на 0');
+    } finally {
+      if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+      setLanguage('en');
+    }
+  });
+});
 
 describe('language switch', () => {
   afterEach(() => setLanguage('en'));

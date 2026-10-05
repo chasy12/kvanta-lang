@@ -58,6 +58,19 @@ for (const lang of ['en', 'uk']) {
   document.body.appendChild(button);
 }
 
+const resultWrap = document.createElement('div');
+resultWrap.id = 'resultWrap';
+document.body.append(resultWrap);
+const consolePanel = document.createElement('section');
+consolePanel.id = 'consolePanel';
+const consoleToggle = document.createElement('button');
+consoleToggle.id = 'consoleToggle';
+const consoleResize = document.createElement('div');
+consoleResize.id = 'consoleResize';
+resultWrap.append(consoleResize, consolePanel);
+consolePanel.append(consoleToggle, consoleClear, consoleLines);
+consoleLines.setAttribute('role', 'log');
+
 const fpsCounter = document.createElement('div');
 fpsCounter.id = 'fpsCounter';
 fpsCounter.hidden = true;
