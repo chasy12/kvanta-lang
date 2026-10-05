@@ -2,7 +2,7 @@ use std::{collections::{HashMap, LinkedList}, sync::{Arc, Mutex}};
 
 use quanta_parser::{ast::{AstBlock, AstNode, AstProgram, AstStatement, BaseValue, BaseValueType, Coords, Expression, ExpressionType, Operator, Type, UnaryOperator, VariableCall}, error::Error};
 use quanta_parser::ast::BaseType;
-use crate::utils::{canvas::{op, Canvas, Style}, scheduler::Scheduler};
+use crate::utils::{canvas::{op, Canvas, Style}, scheduler::Scheduler, input::Input};
 //use js_sys::Math;
 use std::pin::Pin;
 use std::future::Future;
@@ -86,6 +86,7 @@ pub struct Execution {
     pub functions : Arc<HashMap<String, (Vec<(String, Type)>, Option<Type>, AstBlock)>>,
     pub canvas    : Canvas,
     pub scheduler : Scheduler,
+    pub input : Input,
     /// Colors as 0xRRGGBBAA.
     pub figure_color : Arc<Mutex<u32>>,
     pub line_color : Arc<Mutex<u32>>,
@@ -202,6 +203,7 @@ impl Execution {
             scope: Arc::new(Mutex::new(Scope { variables: HashMap::new(), outer_scope: Some(Arc::clone(&self.scope)) })),
             canvas: self.canvas.clone(),
             scheduler: self.scheduler.clone(),
+            input: self.input.clone(),
             global_vars: self.global_vars.clone(),
             functions: Arc::clone(&self.functions),
             figure_color: Arc::clone(&self.figure_color),
@@ -530,11 +532,19 @@ impl Execution {
                 self.canvas.print(result);
                 Ok(None)
             },
-            "input" => {
-                if vals.len() > 0 {
-                    return Err(Error::runtime(String::from("input() takes no arguments"), coords));
+            "readInt" | "readFloat" | "readBool" | "readString" | "input" => {
+                if !vals.is_empty() {
+                    return Err(Error::runtime(format!("{}() takes no arguments", function_name), coords));
                 }
-                Ok(None)
+                let kind = match function_name {
+                    "readFloat" => "float",
+                    "readBool" => "bool",
+                    "readString" => "string",
+                    _ => "int",
+                };
+                self.canvas.flush(false);
+                let val = self.input.read(kind, coords).await?;
+                Ok(Some(BaseValue { val, coords }))
             },
             "output" => Ok(None),
             name => {

@@ -43,7 +43,7 @@ import {
   autocompletion, closeBrackets,
   closeBracketsKeymap, completionKeymap
 } from "@codemirror/autocomplete"
-import { linter, setDiagnostics } from "@codemirror/lint";
+import { linter, lintGutter, lintKeymap, setDiagnostics } from "@codemirror/lint";
 // Language support (your Lezer parser compiled to quanta.js)
 import { quanta, quantaSyntax, quantaLanguageSupport } from "./quanta-support.ts";
 
@@ -53,6 +53,7 @@ import { quantaTheme } from "./custom-theme";
 import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
+import { createConsoleInput } from "./console-input.js";
 import { createConsoleLayout } from "./console-layout.js";
 import { createConsole, formatDuration } from "./console-panel.js";
 import { t, translateError, getLanguage, setLanguage, onLanguageChange, applyTranslations } from "./i18n.js";
@@ -79,6 +80,10 @@ const consolePanel = createConsole(document.getElementById("consoleLines"), {
   onActivity: kind => consoleLayout.notify(kind),
 });
 setPrintHandler((text) => consolePanel.print(text));
+const consoleInput = createConsoleInput(document.getElementById('consoleInput'), {
+  onRequest: () => consoleLayout.reveal(),
+  onSubmit: value => { consolePanel.info('enteredInput', value); canvas.focus(); },
+});
 
 /** The live WASM runtime instance; `undefined` when no program is executing. */
 let runtime = undefined;
@@ -109,6 +114,10 @@ const insertFourSpaces = keymap.of([{
 
 /** Compartment that allows hot-swapping the font-size theme extension. */
 const fontSizeCompartment = new Compartment();
+const languageCompartment = new Compartment();
+function editorPhrases() {
+  return EditorState.phrases.of({ Diagnostics: t('diagnostics'), close: t('closeProblems') });
+}
 
 /**
  * Keymap extension that preserves leading indentation on Enter.
@@ -155,34 +164,32 @@ const newlineSameIndent = keymap.of([{
 // Diagnostics helpers
 // ---------------------------------------------------------------------------
 
-/** The error shown in the editor, so it can be shown again in another language. */
-let shownError = null;
+/** Errors retained so the entire list follows a language change. */
+let shownErrors = [];
 
-/**
- * Display a compiler/runtime error as a CodeMirror inline diagnostic.
- *
- * @param {import("@codemirror/view").EditorView} editor - The active EditorView.
- * @param {{ start_row: number, start_column: number, end_row: number, end_column: number, get_error_message(): string }} err
- */
-export function showError(editor, err) {
-  if (err.start_row > editor.state.doc.lines || err.end_row > editor.state.doc.lines) {
-    showOk(editor);
-    return;
-  }
-  let diagnostics = [];
-  const from_line = editor.state.doc.line(Math.max(1, err.start_row));
-  const from = Math.min(from_line.to, from_line.from + err.start_column);
-  const to_line = editor.state.doc.line(Math.max(1, err.end_row));
-  const to = Math.min(to_line.to, to_line.from + err.end_column);
-  diagnostics.push({
-    from: from,
-    to: to, // adjust for token length if needed
-    severity: "error",
-    message: translateError(err.get_error_message())
+/** Map the compiler's 1-based Unicode columns to CodeMirror's UTF-16 offsets. */
+function sourceOffset(doc, row, column) {
+  const line = doc.line(Math.max(1, row));
+  const characters = Array.from(line.text);
+  return line.from + characters.slice(0, Math.max(0, column - 1)).join('').length;
+}
+
+export function showErrors(editor, errors) {
+  shownErrors = errors.filter(err => err.start_row <= editor.state.doc.lines && err.end_row <= editor.state.doc.lines);
+  const diagnostics = shownErrors.map(err => {
+    const from = sourceOffset(editor.state.doc, err.start_row, err.start_column);
+    const to = Math.max(from, sourceOffset(editor.state.doc, err.end_row, err.end_column));
+    return { from, to, severity: 'error', source: t('line', Math.max(1, err.start_row)), message: translateError(err.get_error_message()) };
   });
-
-  shownError = err;
   editor.dispatch(setDiagnostics(editor.state, diagnostics));
+}
+
+export function showError(editor, err) {
+  showErrors(editor, [err]);
+}
+
+function compilationErrors(result) {
+  return result.get_errors?.() ?? (result.error_code ? [result.get_error()] : []);
 }
 
 /**
@@ -207,7 +214,7 @@ export function reportMessage(message) {
 function jumpTo(row, column) {
   const doc = editor.state.doc;
   const line = doc.line(Math.min(doc.lines, Math.max(1, row)));
-  const pos = Math.min(line.to, line.from + column);
+  const pos = sourceOffset(doc, line.number, column);
   editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
   editor.focus();
 }
@@ -218,7 +225,7 @@ function jumpTo(row, column) {
  * @param {import("@codemirror/view").EditorView} editor
  */
 export function showOk(editor) {
-  shownError = null;
+  shownErrors = [];
   editor.dispatch(setDiagnostics(editor.state, []));
 }
 
@@ -270,26 +277,24 @@ func main() {
 // Background compile (on typing)
 // ---------------------------------------------------------------------------
 
-/**
- * Compile `src` with a fresh WASM `Compiler` instance and show any error
- * as an inline diagnostic in the editor.
- * Called in the background while the user types; does not start execution.
- *
- * @param {{ view: import("@codemirror/view").EditorView }} editor - EditorView or update object.
- * @param {string} src - Full source text to compile.
- */
-async function tryCompile(editor, src) {
+/** Verify a source snapshot without executing it, discarding results after an edit. */
+export async function verifySource(view, src) {
+  const document = view.state.doc;
+  if (document.toString() !== src) return;
   await initWasm();
-  let idle_compiler = Compiler.new();
-  const compilation_result = await idle_compiler.compile_code(src);   // Rust returns drawing commands (string)
-   if (compilation_result.error_code != 0) {
-    const err = compilation_result.get_error();
-    showError(editor.view, err);
-  //   runBtn.disabled = false;
-  //   return;
-   } else {
-  //   showOk(editor);
-   }
+  const compiler = Compiler.new();
+  try {
+    const result = await compiler.check_code(src);
+    if (view.state.doc !== document) return;
+    showErrors(view, compilationErrors(result));
+  } finally {
+    compiler.free?.();
+  }
+}
+
+async function tryCompile(update, src) {
+  try { await verifySource(update.view, src); }
+  catch (error) { console.error(error); }
 }
 
 /** Handle for the debounce timer used by `onTyping`. */
@@ -302,7 +307,7 @@ let typingTimer = null;
  */
 const onTyping = EditorView.updateListener.of(update => {
   if (update.docChanged) {
-    shownError = null;
+    shownErrors = [];
     update.view.dispatch(setDiagnostics(update.state, []));
     // Once the shared program is edited it is the user's own: drop the link
     // from the address bar so a reload shows the saved edits.
@@ -423,6 +428,9 @@ const editor = new EditorView({
      highlightActiveLineGutter(),
     quantaTheme,
     quantaLanguageSupport,
+    lintGutter(),
+    linter(null, { autoPanel: true }),
+    languageCompartment.of(editorPhrases()),
     //keymap.of([{key: "Tab", run: acceptCompletion}]),
     // Highlight text that matches the selected text
     //highlightSelectionMatches(),
@@ -444,7 +452,7 @@ const editor = new EditorView({
       // Autocompletion keys
       ...completionKeymap,
       // Keys related to the linter system
-      //...lintKeymap
+      ...lintKeymap
     ])
   ]
     // extensions: [
@@ -476,6 +484,8 @@ function clearErrors() {
  * @param {boolean} [announce=true] - Note in the console that the program was stopped.
  */
 function doStop(announce = true) {
+  ++currentRun;
+  consoleInput.cancel();
   if (announce && isRunning) consolePanel.info('stopped');
   runtime?.stop();
   runtime = undefined;
@@ -526,9 +536,12 @@ async function executeMouse(x, y) {
  */
 function doRun() {
   const runId = ++currentRun;
+  let mainExecuting = true;
+  let pendingInputs = 0;
   (async () => {
     try {
       runtime?.stop();
+      consoleInput.cancel();
       runtime = undefined;
       cancelNow(false);
       fpsCounter.reset();
@@ -539,13 +552,16 @@ function doRun() {
       consolePanel.start();
       setup();
       await initWasm();
-      const src = editor.state.doc.toString();
+      const runDocument = editor.state.doc;
+      const src = runDocument.toString();
       let compiler = Compiler.new();
-      const compilation_result = await compiler.compile_code(src);   // Rust returns drawing commands (string)
+      const compilation_result = await compiler.compile_code(src);
+      compiler.free?.();
+      if (runId !== currentRun) return;
       if (compilation_result.error_code != 0) {
-        const err = compilation_result.get_error();
-        showError(editor, err);
-        reportError(err);
+        const errors = compilationErrors(compilation_result);
+        if (editor.state.doc === runDocument) showErrors(editor, errors);
+        for (const err of errors) reportError(err);
         runBtn.disabled = false;
         return;
       } else {
@@ -556,12 +572,21 @@ function doRun() {
       const startedAt = performance.now();
       const activeRuntime = compilation_result.get_runtime();
       runtime = activeRuntime;
+      activeRuntime.set_input_handler(kind => {
+        if (runId !== currentRun) return Promise.resolve(null);
+        pendingInputs++;
+        setRunningUI();
+        return consoleInput.request(kind).finally(() => {
+          pendingInputs--;
+          if (runId === currentRun && !mainExecuting && !pendingInputs) setIdleUI();
+        });
+      });
       // An error in a keyboard or mouse handler ends the program.
       activeRuntime.set_error_handler((err) => {
         if (runId !== currentRun) return;
         reportError(err);
         try {
-          showError(editor, err);
+          if (editor.state.doc === runDocument) showError(editor, err);
         } finally {
           doStop(false);
         }
@@ -573,22 +598,28 @@ function doRun() {
         }
       });
       await activeRuntime.execute();
+      mainExecuting = false;
       if (runId !== currentRun || checkIsCancelled()) { return; }
       const err = activeRuntime.get_runtime_error();
       if (err.error_code != 0) {
-        showError(editor, err);
+        if (editor.state.doc === runDocument) showError(editor, err);
         reportError(err);
+        doStop(false);
       } else {
         const duration = performance.now() - startedAt;
         consolePanel.info('finished', () => formatDuration(duration));
       }
     } catch (e) {
+      if (runId !== currentRun) return;
+      consoleInput.cancel();
+      runtime?.stop();
       console.error(e);
       reportMessage(e?.message ?? String(e));
     } finally {
+      mainExecuting = false;
       if (runId === currentRun) {
         fpsCounter.reset();
-        setIdleUI();
+        if (!pendingInputs) setIdleUI();
         runBtn.disabled = false;
       }
     }
@@ -676,7 +707,9 @@ onLanguageChange(() => {
   showLanguage();
   consoleLayout.refresh();
   consolePanel.render();
-  if (shownError) showError(editor, shownError);
+  consoleInput.refresh();
+  editor.dispatch({ effects: languageCompartment.reconfigure(editorPhrases()) });
+  if (shownErrors.length) showErrors(editor, shownErrors);
 });
 
 applyTranslations();

@@ -11,7 +11,7 @@ export function createConsoleLayout({ container, panel, toggle, clear, resize })
   function bounds() {
     const available = container.getBoundingClientRect().height;
     const max = Math.round(available * 0.7);
-    return { available, min: Math.min(96, max), max };
+    return { available, min: Math.min(panel.querySelector('#consoleInput:not([hidden])') ? 160 : 96, max), max };
   }
 
   function setHeight(value) {
@@ -80,6 +80,12 @@ export function createConsoleLayout({ container, panel, toggle, clear, resize })
   refresh();
 
   return {
+    reveal() {
+      open = true;
+      activity = '';
+      refresh();
+      if (lines) lines.scrollTop = lines.scrollHeight;
+    },
     notify(kind) {
       if (open || activity === kind || activity === 'error') return;
       activity = kind;

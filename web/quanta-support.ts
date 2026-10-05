@@ -218,6 +218,11 @@ export const rawCompletionItems = [
   {label: "setTextItalic", type: "function"},
   {label: "setTextLineHeight", type: "function"},
   {label: "print", type: "function"},
+  {label: "readInt", type: "function"},
+  {label: "readFloat", type: "function"},
+  {label: "readBool", type: "function"},
+  {label: "readString", type: "function"},
+  {label: "input", type: "function"},
 ];
 
 export const quantaCompletion = QuantaLanguage.data.of({

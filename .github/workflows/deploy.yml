@@ -40,10 +40,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Test interpreter output
+      - name: Test interpreter
         run: |
           wasm-pack build quanta-lang --release --target nodejs --out-dir /tmp/kvanta-runtime-test-pkg
           node tests/runtime/print.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+          node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+          node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 
       - run: npm ci
       - run: npm test
