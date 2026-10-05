@@ -1,6 +1,9 @@
-@top Program { line* }
+@top Program { statement* }
+
+@skip { whitespace | Comment }
 
 @precedence {
+  unary @right
   mult @left
   add @left
   shift @left
@@ -12,38 +15,45 @@
   or @left
 }
 
-line { Comment | expression }
-
-expression { Function | GlobalBlock | FunctionCall | IfExpression | ForExpression | WhileExpression | ReturnExpression | Name | Type  | Number | Float | Color | Key | BinaryExpression }
+statement {
+  Function | GlobalBlock | VariableDeclaration | Assignment |
+  FunctionCall ";"? | IfExpression | ForExpression | WhileExpression |
+  ReturnExpression
+}
 
 GlobalBlock { Global Block }
-
 Comment { CommentInfo }
 
-Function { Func FuncName "(" Args? ")" Block}
-
+Function { Func FuncName "(" Args? ")" ("->" TypeName)? Block }
 FunctionCall { FuncName "(" Params? ")" }
-
-IfExpression { If "(" expression ")" Block ElseExpression?}
-
-ElseExpression { Else Block }
-
-ForExpression{ For expression In expression Block}
-
-WhileExpression { While "(" expression ")" Block }
-
-ReturnExpression { Return expression }
-
-Params{ expression ("," expression)*}
-
-FuncName{Name}
-
+FuncName { Name | Type }
 Args { Arg ("," Arg)* }
+Arg { TypeName Name }
 
-Arg {Type Name}
+VariableDeclaration { TypeName Name "=" expression ";" }
+Assignment { Variable "=" expression ";" }
+Variable { Name Index* }
+Index { "[" expression "]" }
 
-Block { "{" expression* "}" }
+IfExpression { If "(" expression ")" Block ElseExpression? }
+ElseExpression { Else Block }
+ForExpression { For Name In Range Block }
+Range { "(" expression ".." expression ")" }
+WhileExpression { While "(" expression ")" Block }
+ReturnExpression { Return expression ";" }
+Block { "{" statement* "}" }
 
+Params { (NamedArgument | expression) ("," (NamedArgument | expression))* }
+NamedArgument { (Name | Type) ":" expression }
+
+expression {
+  FunctionCall | Variable | String | Boolean | Number | Float | Color | Key |
+  ArrayLiteral | ParenthesizedExpression | UnaryExpression | BinaryExpression
+}
+
+ArrayLiteral { "{" (expression ("..." | ("," expression)*))? "}" }
+ParenthesizedExpression { "(" expression ")" }
+UnaryExpression { !unary UnaryOp { "!" | "-" | "+" } expression }
 BinaryExpression {
   expression !add ArithOp { "+" | "-" } expression |
   expression !mult ArithOp { "*" | Division | "%" } expression |
@@ -51,64 +61,37 @@ BinaryExpression {
   expression !bitAnd BitOp { "&" } expression |
   expression !bitXor BitOp { "^" } expression |
   expression !bitOr BitOp { "|" } expression |
-  expression !compare CompareOp {">" | ">=" | "<" | "<=" | "==" | "!=" } expression |
+  expression !compare CompareOp { ">" | ">=" | "<" | "<=" | "==" | "!=" } expression |
   expression !and LogicOp { "&&" } expression |
   expression !or LogicOp { "||" } expression
 }
 
-Type {
-  @specialize[@name=Type]<Name,
-    "bool" | "char" | "int" | "float">
-}
-
-If {
-  @specialize[@name=If]<Name, "if">
-}
-
-In {
-  @specialize[@name=In]<Name, "in">
-}
-
-For {
-  @specialize[@name=For]<Name, "for">
-}
-
-While {
-  @specialize[@name=While]<Name, "while">
-}
-
-Else {
-  @specialize[@name=Else]<Name, "else">
-}
-
-Return {
-  @specialize[@name=Return]<Name, "return">
-}
-
-Global {
-  @specialize[@name=Global]<Name, "global">
-}
-
-Color {
-  @specialize[@name=Color]<Name, "Color">
-}
-
-Key {
-  @specialize[@name=Key]<Name, "Key">
-}
-
-Func {
-  @specialize[@name=Func]<Name, "func">
-}
+TypeName { Const? (Type | ArrayType) }
+ArrayType { Array "<" TypeName "," Number ">" }
+Type { @specialize[@name=Type]<Name, "bool" | "char" | "int" | "float" | "color" | "string"> }
+Boolean { @specialize<Name, "true" | "false"> }
+If { @specialize[@name=If]<Name, "if"> }
+In { @specialize[@name=In]<Name, "in"> }
+For { @specialize[@name=For]<Name, "for"> }
+While { @specialize[@name=While]<Name, "while"> }
+Else { @specialize[@name=Else]<Name, "else"> }
+Return { @specialize[@name=Return]<Name, "return"> }
+Global { @specialize[@name=Global]<Name, "global"> }
+Const { @specialize[@name=Const]<Name, "const"> }
+Array { @specialize[@name=Array]<Name, "array"> }
+Color { @specialize[@name=Color]<Name, "Color"> "::" Name }
+Key { @specialize[@name=Key]<Name, "Key"> "::" Name }
+Func { @specialize[@name=Func]<Name, "func"> }
 
 @tokens {
+  whitespace { $[ \t\n\r]+ }
   Name { @asciiLetter $[a-zA-Z0-9_]* }
-  //FuncName {@asciiLetter+}
   Number { @digit+ }
-  Float {@digit+ "." @digit+}
+  Float { @digit+ "." @digit+ }
   CommentInfo { "//" ![\n]* }
   Division { "/" }
-  @precedence {Name, Float, Number, CommentInfo, Division}
+  String { "\"" ("\\" _ | !["\\])* "\"" }
+  @precedence { Name, Float, Number, CommentInfo, Division }
 }
 
 @external propSource quantaHighlight from "./highlight"

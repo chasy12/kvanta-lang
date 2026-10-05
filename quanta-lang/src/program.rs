@@ -3,6 +3,7 @@ use std::{collections::{HashMap, HashSet, LinkedList}, sync::Arc};
 use quanta_parser::{ast::*, error::Error};
 use BaseType::*;
 use TypeName::*;
+use crate::utils::text::{option_type, SETTERS};
 
 #[derive(Debug, Clone)]
 pub struct Scope {
@@ -66,7 +67,7 @@ fn color_type() -> Type
 }
 
 pub fn create_program(ast: AstProgram) -> Program {
-    Program {lines: ast, scope: Scope { variables: HashMap::new(), outer_scope: Box::new(None) }, 
+    let mut program = Program {lines: ast, scope: Scope { variables: HashMap::new(), outer_scope: Box::new(None) },
     global_vars: HashMap::new(),
     expanded_arrays: LinkedList::new(),
     functions: HashMap::new(), function_defs: HashMap::from([
@@ -145,8 +146,23 @@ pub fn create_program(ast: AstProgram) -> Program {
                     "setLineColor", "setFigureColor", "setLineWidth", "polygon", "arc", "sleep", "animate", "frame", "setFps", "clear", "rgb",
                     "round", "decimal", "ceil", "floor", "abs", "sqrt", "random", "print", "input", "output",
                     "for", "while", "global", "func", "if", "else",
-                    "int", "bool", "color", "float", "array", "Color", "true", "false"
-    ].map(|x| String::from(x)))}
+                    "int", "bool", "color", "float", "string", "array", "Color", "true", "false"
+    ].map(|x| String::from(x)))};
+    program.function_defs.insert("text".into(), (vec![
+        ("x".into(), int_type()),
+        ("y".into(), int_type()),
+        ("content".into(), Type::typ(StringType)),
+    ], None));
+    program.keywords.insert("text".into());
+    // string() accepts one value of any type; its arguments are checked separately.
+    program.function_defs.insert("string".into(), (vec![], Some(Type::typ(StringType))));
+    for (setter, option) in SETTERS {
+        program.function_defs.insert(setter.into(), (vec![
+            (option.into(), Type::typ(option_type(option).unwrap())),
+        ], None));
+        program.keywords.insert(setter.into());
+    }
+    program
 }
 
 
@@ -306,9 +322,24 @@ impl Program {
         let mut new_block : AstBlock = AstBlock{ nodes: vec![], coords: block.coords };
         for line in block.nodes {
             match &line.statement {
-                AstStatement::Command { name, args } => {
+                AstStatement::Command { name, args, named_args } => {
                     if let Some(err) = self.clone().type_check_command(name.clone(), args.clone(), line.coords) {
                         return Err(err);
+                    }
+                    let mut seen = HashSet::new();
+                    for (option, expr) in named_args {
+                        if name != "text" {
+                            return Err(Error::type_er("Named arguments are only supported by text()".into(), expr.coords));
+                        }
+                        let expected = option_type(option).ok_or_else(||
+                            Error::type_er(format!("Unknown text option '{}'", option), expr.coords))?;
+                        if !seen.insert(option) {
+                            return Err(Error::logic(format!("Duplicate text option '{}'", option), expr.coords));
+                        }
+                        let actual = self.type_check_expr(expr)?;
+                        if actual.type_name != Primitive(expected.clone()) {
+                            return Err(Error::type_er(format!("Text option '{}' expects '{}', got '{}'", option, expected.to_string(), actual), expr.coords));
+                        }
                     }
                 },
                 AstStatement::Init { typ, val, expr } => {
@@ -430,6 +461,9 @@ impl Program {
 
 
     fn type_check_command(&self, name : String, args : Vec<Expression>, coords: Coords) -> Option<Error> {
+        if name == "string" {
+            return self.type_check_string_conversion(&args, coords).err();
+        }
         // todo warning unused return type
         if let Some((params, _)) = self.function_defs.get(&name) {
             if name == "polygon" {
@@ -448,7 +482,11 @@ impl Program {
                 }
                 return None;
             }
-            if name == "print" || name == "output" {
+            if name == "print" {
+                return args.iter().find_map(|arg| self.type_check_expr(arg)
+                    .and_then(|typ| Self::check_display_type(&typ, arg.coords)).err());
+            }
+            if name == "output" {
                 return None;
             }
             if params.len() != args.len() {
@@ -458,6 +496,13 @@ impl Program {
                 match self.clone().type_check_expr(&args[i]) {
                     Err(error) => return Some(error),
                     Ok(arg_type) => {
+                        // Formatting content accepts any checked value; coordinates stay ints.
+                        if name == "text" && i == 2 {
+                            if let Err(error) = Self::check_display_type(&arg_type, args[i].coords) {
+                                return Some(error);
+                            }
+                            continue;
+                        }
                         if arg_type.type_name != param_type.type_name {
                             return Some(Error::type_er(format!("Wrong type of argument '{}' for command '{}': got '{}', expected '{}'", param_name, name, arg_type, param_type), coords));
                         }
@@ -584,6 +629,28 @@ impl Program {
         while_prog.type_check()
     }
 
+    fn check_display_type(typ: &Type, coords: Coords) -> Result<(), Error> {
+        match &typ.type_name {
+            ExpandingArray(..) => Err(Error::type_er("Array expansion needs a declared size before display or string conversion".into(), coords)),
+            Array(inner, _) => {
+                if let Some(element_type) = inner.as_ref() {
+                    Self::check_display_type(element_type, coords)?;
+                }
+                Ok(())
+            },
+            Primitive(_) => Ok(()),
+        }
+    }
+
+    fn type_check_string_conversion(&self, args: &[Expression], coords: Coords) -> Result<Type, Error> {
+        if args.len() != 1 {
+            return Err(Error::type_er(format!("string expects 1 argument, got {}", args.len()), coords));
+        }
+        let typ = self.type_check_expr(&args[0])?;
+        Self::check_display_type(&typ, args[0].coords)?;
+        Ok(Type::typ(StringType))
+    }
+
     fn type_check_expr(&self, expr : &Expression) -> Result<Type, Error> {
         match &expr.expr_type {
             ExpressionType::Value(base_value) => {
@@ -612,6 +679,16 @@ impl Program {
             ExpressionType::Binary(op, lhs, rhs) => {
                 let lhs_type =  self.clone().type_check_expr(&*lhs)?;
                 let rhs_type =  self.clone().type_check_expr(&*rhs)?;
+                if lhs_type.type_name == Primitive(StringType) || rhs_type.type_name == Primitive(StringType) {
+                    if lhs_type.type_name != Primitive(StringType) || rhs_type.type_name != Primitive(StringType) {
+                        return Err(Error::type_er("String operations require two string values".into(), expr.coords));
+                    }
+                    return match op {
+                        Operator::Plus => Ok(Type::typ(StringType)),
+                        Operator::EQ | Operator::NQ => Ok(Type::typ(Bool)),
+                        _ => Err(Error::type_er("Strings support only +, == and !=".into(), expr.coords)),
+                    };
+                }
                 if *op == Operator::AND || *op == Operator::OR {
                     if lhs_type.type_name != Primitive(Bool) {
                         return Err(Error::type_er(format!("Expected bool expression for operator '{:?}', got '{}'", *op, lhs_type), lhs.coords))
@@ -699,6 +776,9 @@ impl Program {
             },
             BaseValueType::ExpandingArray(val) => Ok(Type{type_name:ExpandingArray(Arc::new(self.type_check_baseval(&val.clone())?), val.clone()), is_const: false}),
             BaseValueType::FunctionCall(name,arg_list, return_type ) => {
+                if name == "string" {
+                    return self.type_check_string_conversion(arg_list, base.coords);
+                }
                 match self.function_defs.get(name) {
                     None => Err(Error::type_er(format!("Unknown function '{}'", name), base.coords)),
                     Some((arg_defs, _)) => {

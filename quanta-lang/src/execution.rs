@@ -7,6 +7,7 @@ use crate::utils::{canvas::{op, Canvas, Style}, scheduler::Scheduler};
 use std::pin::Pin;
 use std::future::Future;
 use rand::Rng;
+use crate::utils::text::{TextStyle, SETTERS};
 
 //use std::{thread, time::Duration};
 
@@ -89,6 +90,7 @@ pub struct Execution {
     pub figure_color : Arc<Mutex<u32>>,
     pub line_color : Arc<Mutex<u32>>,
     pub line_width : Arc<Mutex<i32>>,
+    pub text_style: Arc<Mutex<TextStyle>>,
     pub random_color: Arc<Mutex<i32>>,
     pub expanded_arrays: Arc<Mutex<LinkedList<Expression>>>
 }
@@ -197,6 +199,7 @@ impl Execution {
             figure_color: Arc::clone(&self.figure_color),
             line_color: self.line_color.clone(),
             line_width: self.line_width.clone(),
+            text_style: Arc::clone(&self.text_style),
             random_color: Arc::clone(&self.random_color),
             expanded_arrays: Arc::clone(&self.expanded_arrays)
         }
@@ -316,8 +319,27 @@ impl Execution {
         Ok(vals)
     }
 
+    async fn draw_text(&self, vals: Vec<BaseValue>, named_args: &[(String, Expression)]) -> Result<(), Error> {
+        let x = expect_arg!("text", vals, 0, Int(v) => *v);
+        let y = expect_arg!("text", vals, 1, Int(v) => *v);
+        let content = vals.get(2).ok_or_else(|| Error::runtime("text expects content as its third argument".into(), (0, 0, 0, 0)))?.val.to_display_string();
+        let mut style = self.text_style.lock().unwrap().clone();
+        for (option, expr) in named_args {
+            let value = self.calculate_expression(expr).await?;
+            style.apply(option, &value, expr.coords)?;
+        }
+        self.canvas.text(x, y, content, style);
+        Ok(())
+    }
+
+    /// Calls a builtin or user function with already evaluated arguments.
     /// Calls a builtin or user function with already evaluated arguments.
     async fn call_function(&self, function_name: &str, vals: Vec<BaseValue>, coords: Coords) -> Result<Option<BaseValue>, Error>{
+        if let Some((_, option)) = SETTERS.iter().find(|(setter, _)| *setter == function_name) {
+            let value = vals.first().ok_or_else(|| Error::runtime(format!("{} expects one argument", function_name), coords))?;
+            self.text_style.lock().unwrap().apply(option, value, coords)?;
+            return Ok(None);
+        }
         match function_name {
             "circle" => {
                 let x1 = expect_arg!("circle", vals, 0, Int(v) => *v);
@@ -481,13 +503,14 @@ impl Execution {
                 }
                 Ok(Some(int(random_value, coords)))
             },
-            "print" => {
-                let mut result = String::new();
-                for arg in vals {
-                    result.push_str(arg.val.to_string().as_str());
-                    result.push_str(" ");
+            "string" => {
+                if vals.len() != 1 {
+                    return Err(Error::runtime(format!("string expects 1 argument, got {}", vals.len()), coords));
                 }
-                result = String::from(result.trim());
+                Ok(Some(BaseValue { val: BaseValueType::StringVal(vals[0].val.to_display_string()), coords }))
+            },
+            "print" => {
+                let result = vals.iter().map(|arg| arg.val.to_display_string()).collect::<Vec<_>>().join(" ");
                 self.canvas.print(result);
                 Ok(None)
             },
@@ -602,9 +625,13 @@ impl Execution {
             self.scheduler.maybe_yield(&self.canvas).await?;
             for line in nodes {
                 match &line.statement {
-                    AstStatement::Command { name, args } => {
+                    AstStatement::Command { name, args, named_args } => {
                         let vals = self.evaluate_args(args).await?;
-                        self.call_function(name, vals, line.coords).await?;
+                        if name == "text" {
+                            self.draw_text(vals, named_args).await?;
+                        } else {
+                            self.call_function(name, vals, line.coords).await?;
+                        }
                     },
                     AstStatement::Init { typ : _, val, expr } => {
                         self.execute_init(val, expr, line.coords).await?;
@@ -713,6 +740,15 @@ impl Execution {
                 },
                 ExpressionType::Binary(op, lhs, rhs) => {
                     let (op, left_val, right_val) = (*op, self.calculate_expression(lhs).await?, self.calculate_expression(rhs).await?);
+
+                    if let (BaseValueType::StringVal(left), BaseValueType::StringVal(right)) = (&left_val.val, &right_val.val) {
+                        return match op {
+                            Operator::Plus => Ok(BaseValue { val: BaseValueType::StringVal(format!("{}{}", left, right)), coords: expr.coords }),
+                            Operator::EQ => Ok(bol(left == right, expr.coords)),
+                            Operator::NQ => Ok(bol(left != right, expr.coords)),
+                            _ => Err(Error::runtime("Strings support only +, == and !=".into(), expr.coords)),
+                        };
+                    }
 
                     if let BaseValueType::Int(x) = left_val.val {
                         if let BaseValueType::Int(y) = right_val.val {

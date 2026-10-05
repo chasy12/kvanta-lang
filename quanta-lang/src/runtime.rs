@@ -5,6 +5,7 @@ use quanta_parser::{ast::keys::key_to_number};
 use crate::{execution::{pack_color, Execution, Scope}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler}};
 
 use std::{collections::HashMap, sync::{Arc, Mutex}};
+use crate::utils::text::TextStyle;
 
 #[wasm_bindgen]
 #[derive(Clone)]
@@ -111,6 +112,7 @@ impl Runtime {
             figure_color: Arc::clone(&fig_col),
             line_color: Arc::clone(&lin_col),
             line_width: Arc::clone(&lin_wid),
+            text_style: Arc::new(Mutex::new(TextStyle::default())),
             random_color: Arc::new(Mutex::new(0)),
             expanded_arrays: Arc::new(Mutex::new(prog.expanded_arrays.clone()))
         };

@@ -97,6 +97,15 @@ pub enum BaseValueType {
 }
 
 impl BaseValueType {
+    /// Human-readable output. Array contents retain their literal representation.
+    pub fn to_display_string(&self) -> String {
+        match self {
+            BaseValueType::StringVal(value) => value.clone(),
+            _ => self.to_string(),
+        }
+    }
+
+
     pub fn to_string(&self) -> String {
         match self {
             BaseValueType::Id(var) => format!("{}", var),
@@ -215,7 +224,7 @@ impl BaseValue {
             }, 
             BaseValueType::Int(_) => Ok(Primitive(BaseType::Int)),
             BaseValueType::Bool(_) => Ok(Primitive(BaseType::Bool)),
-            //BaseValueType::StringVal(_) => Ok(Primitive(BaseType::StringType)),
+            BaseValueType::StringVal(_) => Ok(Primitive(BaseType::StringType)),
             BaseValueType::Color(_, _, _, _) => Ok(Primitive(BaseType::Color)),
             BaseValueType::RandomColor(_) => Ok(Primitive(BaseType::Color)),
             BaseValueType::Float(_) => Ok(Primitive(BaseType::Float)),
@@ -342,7 +351,7 @@ pub struct Expression {
 
 #[derive(Debug, Clone)]
 pub enum AstStatement {
-    Command { name: String, args: Vec<Expression> },
+    Command { name: String, args: Vec<Expression>, named_args: Vec<(String, Expression)> },
     Init    { typ: Type, val : String, expr: Expression },
     SetVal { val: VariableCall, expr: Expression },
     For     { val: String, from: Expression, to: Expression, block: AstBlock },

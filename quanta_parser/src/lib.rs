@@ -38,7 +38,7 @@ func keyboard(int key) {
     if (key == Key::Space) {
         setFigureColor(Color::Blue);
     } else {
-      if (key == Key::As) {
+      if (key == Key::A) {
           setFigureColor(Color::Black);
       } else {
           setFigureColor(Color::Yellow);
@@ -69,10 +69,7 @@ func main() {
         let res = parse_ast(contents.as_str());
         match &res {
             Ok(_ast) => {},
-            Err(Error::ParseError{message}) => {println!("{}", message.to_string())}
-            Err(Error::LogicError{message}) => {println!("{}", message.to_string())}
-            Err(Error::TypeError{message}) => {println!("{}", message.to_string())}
-            Err(Error::RuntimeError{message}) => {println!("{}", message.to_string())}
+            Err(error) => {println!("{}", error)}
         }
         assert!(res.is_ok());
     }

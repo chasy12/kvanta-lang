@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use js_sys::{Array, Float64Array, Function};
 use wasm_bindgen::JsValue;
+use super::text::TextStyle;
 
 /// Opcodes of the drawing buffer. Keep in sync with `OP` in web/canvas-runtime.js.
 pub mod op {
@@ -21,6 +22,8 @@ pub mod op {
     pub const STYLE: f64 = 8.0;
     /// index into the strings passed alongside the buffer
     pub const PRINT: f64 = 9.0;
+    /// x, y, content index, color, size, font index, alignment index, bold, italic, line height
+    pub const TEXT: f64 = 10.0;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,6 +80,18 @@ impl Canvas {
         let index = buffer.strings.len() as f64;
         buffer.strings.push(message);
         buffer.ops.extend_from_slice(&[op::PRINT, index]);
+    }
+
+    pub fn text(&self, x: i32, y: i32, content: String, style: TextStyle) {
+        let mut buffer = self.buffer.lock().unwrap();
+        let index = buffer.strings.len() as f64;
+        buffer.strings.extend([content, style.font, style.align]);
+        buffer.ops.extend_from_slice(&[
+            op::TEXT, x as f64, y as f64, index, style.color as f64,
+            style.size as f64, index + 1.0, index + 2.0,
+            u8::from(style.bold) as f64, u8::from(style.italic) as f64,
+            style.line_height as f64,
+        ]);
     }
 
     /// Sets the JS function `(ops: Float64Array, strings: string[], present: bool) => void`

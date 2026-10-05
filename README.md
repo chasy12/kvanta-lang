@@ -36,6 +36,29 @@ Arrays can be nested: `array<array<int, 3>, 3> grid = { {0,1,2}, {3,4,5}, {6,7,8
 
 Expanding array syntax: `array<int, 10> zeros = {0...};`
 
+Strings support Unicode, concatenation with `+`, and comparisons with `==` and `!=`.
+They work in variables, arrays, function arguments and return values. Both operands
+of a string operation must be strings. Use `\"`, `\\`, `\n`, `\r` and `\t` for
+quotes, backslashes, newlines, carriage returns and tabs.
+
+`string(value)` converts a value to text explicitly when you need to build a
+label. Conversion returns a new string and does not change the original value.
+Drawing and printing format values automatically, while assignments and
+arithmetic keep their type checks:
+
+```cpp
+int score = 42;
+text(100, 100, score);
+text(100, 160, "Score: " + string(score));
+score = score + 1;
+```
+
+`"Score: " + score` and `string label = score;` are type errors. Use
+`string(score)` when a string is required. The conversion takes exactly one
+argument and accepts strings, numbers, booleans, colors and arrays.
+An expansion such as `{0...}` needs a sized array declaration before you can
+display or convert it, for example `array<int, 3> values = {0...}; text(100, 100, values);`.
+
 ### Drawing Commands
 
 ```
@@ -48,6 +71,65 @@ polygon(x1, y1, x2, y2, x3, y3, ..)-- polygon from N >= 3 points
 setFigureColor(Color::Red)          -- fill color (default: white)
 setLineColor(Color::Blue)           -- stroke color (default: black)
 setLineWidth(3)                     -- line width in pixels (default: 1)
+```
+
+### Text
+
+`text(x, y, content)` formats a value and draws it on the canvas. Coordinates and font sizes use
+the same virtual pixels as shapes. `y` anchors the top of the first line. Newlines
+start another line; text does not wrap automatically.
+
+```cpp
+string message = "Hello, " + "Kvanta!";
+
+setTextColor(Color::Blue);
+setTextSize(40);
+setTextAlign("center");
+setTextBold(true);
+
+text(500, 200, message);
+text(500, 280, "One red label", color: Color::Red, size: 28, bold: false);
+text(500, 360, "Blue, 40px and bold again");
+```
+
+Setters change the program's text defaults. Named options override those defaults
+for one draw, and can appear in any order after the three required arguments.
+They currently apply to `text()` only. Text styling is independent of shape
+colors and line widths, persists through `clear()` and `frame()`, and is shared
+with functions and event handlers. Each new program starts with fresh defaults.
+
+| Option | Setter | Type | Initial default |
+| --- | --- | --- | --- |
+| `color` | `setTextColor(color)` | `color` | `Color::White` |
+| `size` | `setTextSize(size)` | positive `int` | `24` |
+| `font` | `setTextFont(font)` | non-empty `string` | `"system-ui"` |
+| `align` | `setTextAlign(align)` | `string` | `"left"` |
+| `bold` | `setTextBold(bold)` | `bool` | `false` |
+| `italic` | `setTextItalic(italic)` | `bool` | `false` |
+| `lineHeight` | `setTextLineHeight(lineHeight)` | positive finite `float` | `1.2` |
+
+Alignment accepts `"left"`, `"center"`, `"right"`, `"start"` or `"end"`.
+Fonts can be generic families such as `"serif"` or `"monospace"`, or a font name
+available on the device, such as `"Arial"`. No font files are downloaded.
+`lineHeight` multiplies the font size to set the distance between lines.
+
+```cpp
+setTextFont("monospace");
+setTextItalic(true);
+text(100, 100, "First line\nSecond line", lineHeight: 1.5);
+```
+
+### Console output
+
+`print(value, ...)` sends values to the browser's developer console, separated
+by spaces. It uses the same formatting as `text()` and `string(value)` and is
+independent of text styling. Strings appear without added quotation marks;
+arrays keep braces and quoted string elements so their structure stays readable.
+
+```cpp
+int score = 42;
+print("Score:", score, true); // Console: Print:Score: 42 true
+text(100, 100, {1, 2, 3});    // Canvas: {1, 2, 3}
 ```
 
 ### Colors
@@ -285,6 +367,10 @@ Run all unit tests once:
 ```
 npm test
 ```
+
+Build the interpreter with `wasm-pack build --release --target web` in
+`quanta-lang/` first. The text tests run real programs through WASM and the
+canvas renderer, so rebuild after changing Rust code or the backend grammar.
 
 Run in watch mode (re-runs on file save):
 ```
