@@ -52,6 +52,17 @@ describe('console input', () => {
     await expect(value).resolves.toBe('-1.25e2');
   });
 
+  it.each([
+    ['int', '42'], ['float', '1.25'], ['bool', 'true'],
+  ])('matches runtime Unicode whitespace for %s input', async (kind, raw) => {
+    const value = input.request(kind);
+    submit(`\uFEFF${raw}`);
+    expect(field().getAttribute('aria-invalid')).toBe('true');
+    submit(`\u0085${raw}\u0085`);
+    await expect(value).resolves.toBe(`\u0085${raw}\u0085`);
+    expect(host.hidden).toBe(true);
+  });
+
   it('accepts true/false booleans and preserves empty and whitespace strings', async () => {
     const bool = input.request('bool');
     submit('yes');

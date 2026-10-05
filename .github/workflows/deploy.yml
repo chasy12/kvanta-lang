@@ -46,6 +46,7 @@ jobs:
           node tests/runtime/print.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
           node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
           node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+          node tests/runtime/errors.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 
       - run: npm ci
       - run: npm test

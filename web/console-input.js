@@ -4,7 +4,8 @@ const FLOAT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const ERROR_KEYS = { int: 'invalidInt', float: 'invalidFloat', bool: 'invalidBool' };
 
 function valid(kind, raw) {
-  const text = raw.trim();
+  // Rust str::trim uses Unicode White_Space, which differs from JS trim.
+  const text = raw.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
   switch (kind) {
     case 'int': return /^[+-]?\d+$/.test(text) && Number(text) >= -2147483648 && Number(text) <= 2147483647;
     case 'float': return FLOAT.test(text) && Number.isFinite(Math.fround(Number(text)));

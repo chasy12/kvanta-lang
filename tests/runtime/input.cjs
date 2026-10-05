@@ -33,9 +33,70 @@ async function deadline(promise) {
 }
 
 (async () => {
-  // The old input() stub never returns a value. The alias must now read one.
+  // input() obtains the required primitive type from the program.
   const alias = await run('int n = input(); print(n);', () => Promise.resolve('42'));
   assert.deepEqual(ok(alias), ['42']);
+
+  const inferredValues = ['-2147483648', '1.25e2', ' true ', ' hello ', ''];
+  const inferredKinds = [];
+  const inferred = await run('int i=input(); float f=input(); bool b=input(); string s=input(); string e=input(); print(i,f,b,s); print(e);', kind => {
+    inferredKinds.push(kind);
+    return Promise.resolve(inferredValues.shift());
+  });
+  assert.deepEqual(ok(inferred), ['-2147483648 125 true  hello ', '']);
+  assert.deepEqual(inferredKinds, ['int', 'float', 'bool', 'string', 'string']);
+
+  const contextualValues = ['welcome', '1.5', 'name', '2.5'];
+  const contextualKinds = [];
+  const contextual = await run('global {string greeting=input();} func next()->float{return input();} func echo(string text)->string{return text;} func main(){float f=next(); string s=echo(input()); f=input(); print(greeting,f,s);}', kind => {
+    contextualKinds.push(kind);
+    return Promise.resolve(contextualValues.shift());
+  });
+  assert.deepEqual(ok(contextual), ['welcome 2.5 name']);
+  assert.deepEqual(contextualKinds, ['string', 'float', 'string', 'float']);
+
+  const controlValues = ['true', 'true', 'false', '2', '3'];
+  const controlKinds = [];
+  const control = await run('if(input()){print("yes");} while(input()){print("loop");} for i in(input()..input()){print(i);}', kind => {
+    controlKinds.push(kind);
+    return Promise.resolve(controlValues.shift());
+  });
+  assert.deepEqual(ok(control), ['yes', 'loop', '2', '3']);
+  assert.deepEqual(controlKinds, ['bool', 'bool', 'bool', 'int', 'int']);
+
+  const arrayValues = ['a', 'b', 'c', '1.25', '2.5'];
+  const arrayKinds = [];
+  const arrays = await run('array<string,2> words={input(),input()}; words[1]=input(); array<float,2> values={input()...}; print(words,values);', kind => {
+    arrayKinds.push(kind);
+    return Promise.resolve(arrayValues.shift());
+  });
+  assert.deepEqual(ok(arrays), ['{"a", "c"} {1.25, 2.5}']);
+  assert.deepEqual(arrayKinds, ['string', 'string', 'string', 'float', 'float']);
+
+  const expressionValues = ['1.25', '2.5', '3.5', '4', '2.25', '3.6'];
+  const expressionKinds = [];
+  const expressions = await run('float sum=input()+input(); print(sum, input()+1.5, 1+input(), input()<2.5, round(input()));', kind => {
+    expressionKinds.push(kind);
+    return Promise.resolve(expressionValues.shift());
+  });
+  assert.deepEqual(ok(expressions), ['3.75 5 5 true 4']);
+  assert.deepEqual(expressionKinds, ['float', 'float', 'float', 'int', 'float', 'float']);
+
+  const diagnostics = Compiler.new().check_code('print(input()); int n=true;');
+  assert.equal(diagnostics.get_errors().length, 2);
+  assert.equal(Compiler.new().check_code('print(input()+input());').get_errors().length, 2);
+  assert.equal(Compiler.new().check_code('input();').get_errors().length, 1);
+  assert.match(Compiler.new().check_code('int n=input(1);').get_error_message(), /'input' expects 0 arguments/);
+
+  for (const [type, bad] of [['int', '1.5'], ['float', 'Infinity'], ['bool', 'yes']]) {
+    const invalid = await run(`print("before");\n${type} value = input();\nprint("after");`, () => Promise.resolve(bad));
+    assert.equal(invalid.error.error_code, 4);
+    assert.match(invalid.error.get_error_message(), new RegExp(`Invalid ${type} input`));
+    assert.equal(invalid.error.start_row, 2);
+    assert.equal(invalid.error.start_column, type.length + 10);
+    assert.equal(invalid.error.end_column, type.length + 17);
+    assert.deepEqual(invalid.output, ['before']);
+  }
 
   const values = ['-2147483648', '1.25e2', ' true ', ' hello ', ''];
   const kinds = [];

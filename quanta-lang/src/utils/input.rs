@@ -78,12 +78,23 @@ impl Input {
             return Err(Error::runtime(String::from("Input request cancelled"), coords));
         }
         let raw = response.as_string().ok_or_else(|| {
-            Error::runtime(format!("Invalid {} input", kind), coords)
+            invalid_input(kind, coords)
         })?;
         parse_value(kind, &raw).ok_or_else(|| {
-            Error::runtime(format!("Invalid {} input", kind), coords)
+            invalid_input(kind, coords)
         })
     }
+}
+
+fn invalid_input(kind: &str, coords: Coords) -> Error {
+    let message = match kind {
+        "int" => "Invalid int input: expected a whole number from -2147483648 to 2147483647",
+        "float" => "Invalid float input: expected a finite decimal number",
+        "bool" => "Invalid bool input: expected true or false",
+        "string" => "Invalid string input: expected text",
+        _ => return Error::runtime(format!("Invalid {} input", kind), coords),
+    };
+    Error::runtime(message.to_string(), coords)
 }
 
 fn parse_value(kind: &str, raw: &str) -> Option<BaseValueType> {

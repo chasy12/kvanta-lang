@@ -185,27 +185,40 @@ into one with a ×N count. Each line shows the time since the program started.
 
 ### Program input
 
-Typed reads pause the program until the user submits a value in the console:
+Use one function, `input()`, to read a value. Its type comes from the code around it:
 
 ```
 print("Your name:");
-string name = readString();
+string name = input();
 print("Your age:");
-int age = readInt();
-print("Hello", name, "age", age);
+int age = input();
+print("Radius:");
+float radius = input();
+print("Draw the circle? true / false");
+bool draw = input();
+print("Hello", name, "age", age, "radius", radius, "draw", draw);
 ```
 
-- `readInt()` reads an integer from -2147483648 to 2147483647.
-- `readFloat()` reads a finite decimal number, including exponent notation.
-- `readBool()` reads `true` or `false`.
-- `readString()` reads one line, preserving spaces and allowing an empty string.
-- `input()` is an alias for `readInt()`.
+- `int` accepts a whole number from -2147483648 to 2147483647.
+- `float` accepts a finite decimal number, including exponent notation.
+- `bool` accepts `true` or `false`.
+- `string` preserves spaces and accepts an empty line.
 
-All reads take no arguments. Use `print()` before a read to ask a question. Invalid
-input shows a message and lets the user retry. **Stop** cancels pending input.
-Reads work inside expressions, functions, loops, global initializers and canvas event
-handlers. Simultaneous requests are shown in arrival order. The console opens when
+`input()` takes no arguments. Declarations, assignments, function parameters and
+returns, conditions, loop bounds and typed expressions determine what it reads.
+For example, `circle(500, 500, input());` requests an integer radius. If the type
+is ambiguous, as in `print(input());`, the verifier asks for a typed context.
+Color and whole-array input are unsupported. Primitive array elements can use input.
+
+Use `print()` before input to ask a question. Execution pauses until the user submits
+a valid value in the console. Invalid input shows a message and permits a retry.
+The runtime also checks received values and reports failures at the input call.
+**Stop** cancels pending input. Global initializers and canvas event handlers support
+input too. Simultaneous requests appear in arrival order. The console opens when
 input is requested; closing it or clearing output retains the pending request.
+
+The earlier `readInt()`, `readFloat()`, `readBool()` and `readString()` functions remain
+available for existing programs.
 
 ### Verification
 
@@ -501,7 +514,7 @@ Run in watch mode (re-runs on file save):
 npm run test:watch
 ```
 
-The real WASM regression checks cover output, verification and input. Build a Node
+The real WASM regression checks cover output, verification, input and runtime errors. Build a Node
 WASM package, then run them:
 
 ```bash
@@ -509,4 +522,5 @@ wasm-pack build quanta-lang --release --target nodejs --out-dir /tmp/kvanta-runt
 node tests/runtime/print.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/diagnostics.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 node tests/runtime/input.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
+node tests/runtime/errors.cjs /tmp/kvanta-runtime-test-pkg/quanta_lang.js
 ```
