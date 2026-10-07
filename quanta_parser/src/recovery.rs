@@ -1,5 +1,7 @@
 //! Verification-only recovery. Bad statements are quarantined in a copy of
 //! the source; the compiler never executes the resulting partial AST.
+use std::collections::HashSet;
+
 use crate::{ast::AstProgram, error::Error, parse_ast_with_diagnostics};
 
 #[derive(Clone, Copy)]
@@ -103,19 +105,139 @@ fn position(chars: &[char], (row, column): (usize, usize)) -> usize {
     chars.len()
 }
 
+/// Index just past the last code character of `line`, ignoring a trailing
+/// `//` comment and whitespace; 0 for a blank or comment-only line.
+fn code_end(line: &[char]) -> usize {
+    let mut string = false;
+    let mut last = 0;
+    let mut i = 0;
+    while i < line.len() {
+        let c = line[i];
+        if string {
+            if c == '\\' { i += 2; continue; }
+            if c == '"' { string = false; last = i + 1; }
+        } else if c == '/' && line.get(i + 1) == Some(&'/') {
+            break;
+        } else {
+            if c == '"' { string = true; }
+            if !c.is_whitespace() { last = i + 1; }
+        }
+        i += 1;
+    }
+    last
+}
+
+/// When `pos` is the first token on its line, the index just past the code
+/// on the closest earlier line that has any: where a forgotten `;` belongs.
+fn previous_code_end(chars: &[char], pos: usize) -> Option<usize> {
+    let line_start = chars[..pos].iter().rposition(|c| *c == '\n')? + 1;
+    if !chars[line_start..pos].iter().all(|c| c.is_whitespace()) { return None; }
+    let mut end = line_start - 1;
+    loop {
+        let start = chars[..end].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
+        let code = code_end(&chars[start..end]);
+        if code > 0 { return Some(start + code); }
+        if start == 0 { return None; }
+        end = start - 1;
+    }
+}
+
+fn row_column(chars: &[char], index: usize) -> (usize, usize) {
+    let row = 1 + chars[..index].iter().filter(|c| **c == '\n').count();
+    let line_start = chars[..index].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
+    (row, index - line_start + 1)
+}
+
+/// Names that the statements in `text` declare (variables and functions),
+/// best effort, since the text failed to parse.
+fn declared_names(text: &[char]) -> Vec<String> {
+    let mut tokens = vec![];
+    let mut i = 0;
+    while i < text.len() {
+        let c = text[i];
+        if c == '"' {
+            i += 1;
+            while i < text.len() && text[i] != '"' { i += if text[i] == '\\' { 2 } else { 1 }; }
+            tokens.push("\"".to_string());
+        } else if c == '/' && text.get(i + 1) == Some(&'/') {
+            while i < text.len() && text[i] != '\n' { i += 1; }
+        } else if c.is_alphanumeric() || c == '_' {
+            let start = i;
+            while i < text.len() && (text[i].is_alphanumeric() || text[i] == '_') { i += 1; }
+            tokens.push(text[start..i].iter().collect());
+            continue;
+        } else if !c.is_whitespace() {
+            tokens.push(c.to_string());
+        }
+        i += 1;
+    }
+    let mut names = vec![];
+    for statement in tokens.split(|token| matches!(token.as_str(), ";" | "{" | "}")) {
+        let mut rest = statement;
+        if rest.first().is_some_and(|token| token == "global") { rest = &rest[1..]; }
+        if rest.first().is_some_and(|token| token == "func") {
+            names.extend(rest.get(1).cloned());
+            continue;
+        }
+        if rest.first().is_some_and(|token| token == "const") { rest = &rest[1..]; }
+        let name = match rest.first().map(String::as_str) {
+            Some("int" | "float" | "bool" | "color" | "string") => rest.get(1),
+            Some("array") => {
+                let mut depth = 0;
+                let close = rest.iter().position(|token| {
+                    match token.as_str() { "<" => depth += 1, ">" => depth -= 1, _ => {} }
+                    token == ">" && depth == 0
+                });
+                close.and_then(|close| rest.get(close + 1))
+            },
+            _ => None,
+        };
+        if let Some(name) = name.filter(|name| name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
 pub fn parse_ast_recovering(source: &str) -> (Option<AstProgram>, Vec<Error>) {
+    let (ast, errors, _) = parse_ast_recovering_with_quarantine(source);
+    (ast, errors)
+}
+
+/// Like `parse_ast_recovering`, also returning the names declared by the
+/// quarantined code, so uses of them are not reported as undefined.
+pub fn parse_ast_recovering_with_quarantine(source: &str) -> (Option<AstProgram>, Vec<Error>, HashSet<String>) {
     let mut chars: Vec<char> = source.chars().collect();
-    let candidates = regions(source);
+    let mut candidates = regions(source);
     let mut errors = vec![];
+    let mut quarantined = HashSet::new();
     loop {
         let working: String = chars.iter().collect();
         match parse_ast_with_diagnostics(&working) {
             Ok((ast, diagnostics)) => {
                 errors.extend(diagnostics);
-                return (Some(ast), errors);
+                return (Some(ast), errors, quarantined);
             },
             Err(mut error) => {
                 let pos = position(&chars, error.start);
+                // An error at the first token of a line usually means the
+                // previous statement is missing its `;`. Insert it, as
+                // rustc and clang do, if that lets parsing get further.
+                if let Some(end) = previous_code_end(&chars, pos) {
+                    let mut repaired = chars.clone();
+                    repaired.insert(end, ';');
+                    let progressed = match parse_ast_with_diagnostics(&repaired.iter().collect::<String>()) {
+                        Ok(_) => true,
+                        Err(next) => position(&repaired, next.start) > pos + 1,
+                    };
+                    if progressed {
+                        let (row, column) = row_column(&repaired, end);
+                        errors.push(Error::parse("Probably missing ';'".to_string(), (row, column, row, column)));
+                        chars = repaired;
+                        candidates = regions(&chars.iter().collect::<String>());
+                        continue;
+                    }
+                }
                 if error.message.starts_with("ERROR ") && error.message.contains(" on line '") {
                     if let Some(line) = source.lines().nth(error.start.0.saturating_sub(1)) {
                         let prefix = error.message.split(" on line '").next().unwrap();
@@ -130,8 +252,15 @@ pub fn parse_ast_recovering(source: &str) -> (Option<AstProgram>, Vec<Error>) {
                     .or_else(|| candidates.iter().filter(contains_code)
                         .filter(|r| r.end <= pos)
                         .max_by_key(|r| (r.end, usize::MAX - (r.end - r.start))))
-                    .copied();
-                let Some(region) = region else { return (None, errors); };
+                    .copied()
+                    // Blanking a broken block header alone would orphan its
+                    // body and closing `}`, so quarantine the whole block.
+                    .map(|region| if chars[region.end - 1] != '{' { region } else {
+                        candidates.iter().filter(|r| r.start == region.start && r.end > region.end)
+                            .min_by_key(|r| r.end).copied().unwrap_or(region)
+                    });
+                let Some(region) = region else { return (None, errors, quarantined); };
+                quarantined.extend(declared_names(&chars[region.start..region.end]));
                 for c in &mut chars[region.start..region.end] {
                     if *c != '\n' && *c != '\r' { *c = ' '; }
                 }
@@ -202,6 +331,34 @@ rectangle(1,,2,3);"#] {
             assert_eq!(errors.len(), 2, "{:?}", errors);
             assert_eq!(errors.iter().map(|error| error.start.0).collect::<Vec<_>>(), vec![2,3]);
         }
+    }
+    #[test]
+    fn blames_a_missing_semicolon_on_its_own_line_without_cascading() {
+        let source = "func main() {\n  int speed = 3\n  array<int, 16> bx = {0...};\n  array<int, 16> by = {0...};\n  for i in (0..16) {\n    circle(bx[i], by[i], speed);\n  }\n}\n";
+        let (ast, errors) = parse_ast_recovering(source);
+        assert!(ast.is_some());
+        assert_eq!(errors.len(), 1, "{:?}", errors);
+        assert_eq!(errors[0].message, "Probably missing ';'");
+        assert_eq!(errors[0].start, (2, 16));
+    }
+    #[test]
+    fn missing_semicolon_skips_trailing_and_standalone_comments() {
+        let source = "int a = 1 // one; {\n// note\n\n    int b = 2;\nprint(a + b);";
+        let (ast, errors) = parse_ast_recovering(source);
+        assert!(ast.is_some());
+        assert_eq!(errors.len(), 1, "{:?}", errors);
+        assert_eq!(errors[0].message, "Probably missing ';'");
+        assert_eq!(errors[0].start, (1, 10));
+    }
+    #[test]
+    fn reports_names_declared_by_quarantined_statements() {
+        let source = "global {\n  array<array<int, 2>, 2> grid = {{1,,2}};\n}\nfunc broken(int x {\n}\nfunc main() {\n  const int n = (1;\n  print(n);\n}";
+        let (_, errors, names) = parse_ast_recovering_with_quarantine(source);
+        assert!(!errors.is_empty());
+        for name in ["grid", "broken", "n"] {
+            assert!(names.contains(name), "{} not in {:?}", name, names);
+        }
+        assert!(!names.contains("main") && !names.contains("print"), "{:?}", names);
     }
 
 }

@@ -867,9 +867,39 @@ describe('batch diagnostics', () => {
     const view = EditorView.findFromDOM(document.getElementById('editor'));
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'bad();\nwrong();' } });
     document.getElementById('runBtn').click();
-    await vi.waitFor(() => expect(document.querySelectorAll('.cm-panel-lint li')).toHaveLength(2));
+    await vi.waitFor(() => expect(diagnosticCount(view.state)).toBe(2));
     expect((await consoleText()).filter(text => text.includes('Division by 0'))).toHaveLength(2);
+    expect(document.querySelector('.cm-panel-lint')).toBeNull();
     expect(document.getElementById('runBtn').dataset.state).toBe('run');
+  });
+
+  it('shows background check errors in the console, replacing the previous check', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'bad();\nwrong();' } });
+    document.getElementById('consoleClear').click();
+    Compiler.new.mockReturnValueOnce({ check_code: async () => ({ error_code: 3, get_errors: () => [errorAt(1, 1, 4, 'First'), errorAt(2, 1, 6, 'Second')] }) });
+    await verifySource(view, view.state.doc.toString());
+    expect(await consoleText()).toEqual(['Line 1Type error: First', 'Line 2Type error: Second']);
+    expect(document.querySelector('.cm-panel-lint')).toBeNull();
+    Compiler.new.mockReturnValueOnce({ check_code: async () => ({ error_code: 3, get_errors: () => [errorAt(2, 1, 6, 'Second')] }) });
+    await verifySource(view, view.state.doc.toString());
+    expect(await consoleText()).toEqual(['Line 2Type error: Second']);
+    Compiler.new.mockReturnValueOnce({ check_code: async () => ({ error_code: 0, get_errors: () => [] }) });
+    await verifySource(view, view.state.doc.toString());
+    expect(await consoleText()).toEqual([]);
+  });
+
+  it('replaces Run verification errors with the next background check', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    const view = EditorView.findFromDOM(document.getElementById('editor'));
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'bad();\nwrong();' } });
+    Compiler.new.mockReturnValueOnce({ compile_code: async () => ({ error_code: 3, get_errors: () => [errorAt(1, 1, 4, 'Old')] }) });
+    document.getElementById('runBtn').click();
+    await vi.waitFor(async () => expect(await consoleText()).toEqual(['Line 1Type error: Old']));
+    Compiler.new.mockReturnValueOnce({ check_code: async () => ({ error_code: 3, get_errors: () => [errorAt(2, 1, 6, 'New')] }) });
+    await verifySource(view, view.state.doc.toString());
+    expect(await consoleText()).toEqual(['Line 2Type error: New']);
   });
 
   it('retains runtime error marks when a background check finishes later', async () => {

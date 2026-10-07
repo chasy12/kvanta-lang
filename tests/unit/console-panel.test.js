@@ -152,6 +152,34 @@ describe('createConsole', () => {
 });
 
 
+describe('check problems', () => {
+  const problem = (row, message) => ({ error_code: 1, start_row: row, start_column: 1, get_error_message: () => message });
+
+  it('replaces the previous check instead of piling up, after program output', () => {
+    panel.print('out');
+    panel.problems([problem(2, "Probably missing ';'"), problem(5, 'Division by 0')]);
+    expect(lines()).toHaveLength(3);
+    panel.problems([problem(7, 'Division by 0')]);
+    expect(lines().map(li => li.textContent)).toEqual(['00:00.000out', 'Line 7Syntax error: Division by 0']);
+    panel.problems([]);
+    expect(lines().map(li => li.textContent)).toEqual(['00:00.000out']);
+  });
+
+  it('shows no run time, since a check is not part of a run', () => {
+    panel.problems([problem(1, 'Division by 0')]);
+    expect(lines()[0].querySelector('.console__time').textContent).toBe('');
+  });
+
+  it('keeps output printed after the check when the next check replaces it', () => {
+    panel.problems([problem(1, 'Division by 0')]);
+    lines();
+    panel.print('later');
+    panel.problems([]);
+    expect(lines().map(li => li.textContent)).toEqual(['00:00.000later']);
+  });
+});
+
+
 describe('console activity', () => {
   it('notifies for repeated prints and errors, but not run statuses', () => {
     const activity = [];

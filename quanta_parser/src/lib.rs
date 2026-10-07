@@ -7,7 +7,7 @@ use crate::ast::{builder::AstBuilder, AstProgram};
 pub mod ast;
 pub mod error;
 mod recovery;
-pub use recovery::parse_ast_recovering;
+pub use recovery::{parse_ast_recovering, parse_ast_recovering_with_quarantine};
 
 #[derive(Parser)]
 #[grammar = "../grammar/grammar.pest"]

@@ -262,7 +262,9 @@ export async function verifySource(view, src) {
     if (view.state.doc !== document) return;
     // A static check cannot clear a runtime failure on the same source.
     if (diagnosticDocument === document && shownErrors.some(error => error.error_code === 4)) return;
-    showErrors(view, compilationErrors(result));
+    const errors = compilationErrors(result);
+    showErrors(view, errors);
+    consolePanel.problems(errors);
   } finally {
     compiler.free?.();
   }
@@ -406,7 +408,7 @@ const editor = new EditorView({
     quantaTheme,
     quantaLanguageSupport,
     lintGutter(),
-    linter(null, { autoPanel: true }),
+    linter(null),
     languageCompartment.of(editorPhrases()),
     //keymap.of([{key: "Tab", run: acceptCompletion}]),
     // Highlight text that matches the selected text
@@ -538,7 +540,7 @@ function doRun() {
       if (compilation_result.error_code != 0) {
         const errors = compilationErrors(compilation_result);
         if (editor.state.doc === runDocument) showErrors(editor, errors);
-        for (const err of errors) reportError(err);
+        consolePanel.problems(errors);
         runBtn.disabled = false;
         return;
       } else {

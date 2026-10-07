@@ -7,6 +7,7 @@
  *   - Identical `print()` lines in a row collapse into one with a ×N count.
  *   - Colors in printed text (`color(r, g, b, a)`) get a swatch.
  *   - Errors show their line; clicking it calls `onJump(row, column)`.
+ *   - Problems from the latest check replace the previous check's problems.
  *   - Only the last `maxEntries` lines are kept.
  *   - Lines are stored as data and re-rendered by `render()`, so they follow
  *     a language switch.
@@ -69,7 +70,7 @@ function appendPrinted(parent, text) {
  * @param {{ onJump?: (row: number, column: number) => void, maxEntries?: number, now?: () => number, onActivity?: (kind: string) => void }} [options]
  */
 export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = () => performance.now(), onActivity = () => {} } = {}) {
-  /** @type {Array<{ kind: string, time: number, text?: string, count?: number, key?: string, params?: any[], code?: number, message?: string, row?: number, column?: number, node?: HTMLElement }>} */
+  /** @type {Array<{ kind: string, problem?: boolean, time: number, text?: string, count?: number, key?: string, params?: any[], code?: number, message?: string, row?: number, column?: number, node?: HTMLElement }>} */
   let entries = [];
   let startedAt = now();
 
@@ -79,7 +80,7 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
 
     const time = document.createElement('span');
     time.className = 'console__time';
-    time.textContent = formatElapsed(entry.time);
+    time.textContent = entry.problem ? '' : formatElapsed(entry.time);
     li.append(time);
 
     const body = document.createElement('span');
@@ -193,6 +194,25 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
      */
     error(err) {
       add({ kind: 'error', code: err.error_code, message: err.get_error_message(), row: err.start_row, column: err.start_column });
+    },
+
+    /**
+     * Show the errors of the latest check of the code, replacing the
+     * previous check's errors. They are not part of a run, so have no time.
+     *
+     * @param {Array<{ error_code: number, start_row: number, start_column: number, get_error_message(): string }>} errors
+     */
+    problems(errors) {
+      for (const entry of entries) {
+        if (!entry.problem) continue;
+        if (entry.node) expiredNodes.add(entry.node);
+        stale.delete(entry);
+      }
+      entries = entries.filter(entry => !entry.problem);
+      for (const err of errors) {
+        add({ kind: 'error', problem: true, code: err.error_code, message: err.get_error_message(), row: err.start_row, column: err.start_column });
+      }
+      schedule();
     },
 
     /** Add an error without a source location, e.g. an internal failure. */
