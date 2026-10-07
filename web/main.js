@@ -638,8 +638,14 @@ function doRun() {
 
 /** Show `key`'s text on `button` and keep it when the language changes. */
 function setButtonText(button, key) {
-  button.dataset.i18n = key;
-  button.textContent = t(key);
+  const label = button.querySelector('[data-i18n]') ?? button;
+  label.dataset.i18n = key;
+  label.textContent = t(key);
+  if (button.hasAttribute('data-i18n-title')) {
+    const titleKey = key === 'share' ? 'shareTitle' : key;
+    button.dataset.i18nTitle = titleKey;
+    button.title = t(titleKey);
+  }
 }
 
 /** Switch the Run button to "Stop" and focus the canvas. */
@@ -651,7 +657,7 @@ function setRunningUI() {
   canvas.focus();
 }
 
-/** Switch the Run button back to "Run your program!" and mark execution idle. */
+/** Switch the Run button back to "Run" and mark execution idle. */
 function setIdleUI() {
   isRunning = false;
   setButtonText(runBtn, 'run');
@@ -733,7 +739,11 @@ shareBtn.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(url);
     setButtonText(shareBtn, 'linkCopied');
-    setTimeout(() => setButtonText(shareBtn, 'share'), 2000);
+    shareBtn.dataset.state = 'copied';
+    setTimeout(() => {
+      setButtonText(shareBtn, 'share');
+      delete shareBtn.dataset.state;
+    }, 2000);
   } catch {
     prompt(t('promptCopyLink'), url);
   }

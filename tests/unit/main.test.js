@@ -494,6 +494,48 @@ describe('Pane resizer', () => {
 describe('runBtn – click handler', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('preserves the icon and updates the tooltip through Run, Stop and language changes', async () => {
+    const button = document.getElementById('runBtn');
+    const previousMarkup = button.innerHTML;
+    const previousKey = button.getAttribute('data-i18n');
+    const previousTitleKey = button.getAttribute('data-i18n-title');
+    const previousTitle = button.getAttribute('title');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const label = document.createElement('span');
+    label.dataset.i18n = 'run';
+    label.textContent = 'Run';
+    button.removeAttribute('data-i18n');
+    button.dataset.i18nTitle = 'run';
+    button.title = 'Run';
+    button.replaceChildren(icon, label);
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+
+    try {
+      button.click();
+      await vi.waitFor(() => expect(button.textContent).toBe('Stop'));
+      expect(button.contains(icon)).toBe(true);
+      expect(button.title).toBe('Stop');
+      setLanguage('uk');
+      expect(button.textContent).toBe('Зупинити');
+      expect(button.title).toBe('Зупинити');
+      expect(button.contains(icon)).toBe(true);
+      button.click();
+      expect(button.textContent).toBe('Запустити');
+      expect(button.title).toBe('Запустити');
+      expect(button.contains(icon)).toBe(true);
+    } finally {
+      if (button.dataset.state === 'stop') button.click();
+      button.innerHTML = previousMarkup;
+      if (previousKey === null) button.removeAttribute('data-i18n');
+      else button.setAttribute('data-i18n', previousKey);
+      if (previousTitleKey === null) button.removeAttribute('data-i18n-title');
+      else button.setAttribute('data-i18n-title', previousTitleKey);
+      if (previousTitle === null) button.removeAttribute('title');
+      else button.setAttribute('title', previousTitle);
+      setLanguage('en');
+    }
+  });
+
   it('calls cancelNow(false) at the start of a run', async () => {
     document.getElementById('runBtn').click();
     await vi.waitFor(
@@ -715,6 +757,26 @@ describe('console controls', () => {
   });
 });
 
+describe('shareBtn', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('shows the copied state for two seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const button = document.getElementById('shareBtn');
+
+    button.click();
+    await vi.waitFor(() => expect(button.dataset.state).toBe('copied'));
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(button.textContent).toBe('Link copied');
+
+    vi.advanceTimersByTime(2000);
+    expect(button.dataset.state).toBeUndefined();
+    expect(button.textContent).toBe('Share');
+  });
+});
+
 describe('language switch', () => {
   afterEach(() => setLanguage('en'));
 
@@ -730,7 +792,7 @@ describe('language switch', () => {
 
     document.querySelector('[data-lang="uk"]').click();
 
-    expect(runBtn.textContent).toBe('Запустити програму!');
+    expect(runBtn.textContent).toBe('Запустити');
     expect(document.documentElement.lang).toBe('uk');
     expect(document.querySelector('[data-lang="uk"]').getAttribute('aria-pressed')).toBe('true');
     expect((await consoleText())[0]).toContain('Рядок 1');

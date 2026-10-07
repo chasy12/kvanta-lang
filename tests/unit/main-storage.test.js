@@ -20,9 +20,9 @@ it('starts the editor and switches language when storage is blocked', async () =
     view = EditorView.findFromDOM(document.getElementById('editor'));
     expect(view).toBeTruthy();
     expect(view.state.doc.length).toBeGreaterThan(0);
-    expect(document.getElementById('runBtn').textContent).toBe('Запустити програму!');
+    expect(document.getElementById('runBtn').textContent).toBe('Запустити');
     document.querySelector('[data-lang="en"]').click();
-    expect(document.getElementById('runBtn').textContent).toBe('Run your program!');
+    expect(document.getElementById('runBtn').textContent).toBe('Run');
     vi.useFakeTimers();
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'print(1);' } });
     await vi.advanceTimersByTimeAsync(1000);
