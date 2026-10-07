@@ -53,6 +53,7 @@ import { quantaTheme } from "./custom-theme";
 import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
+import { EXAMPLE_PROGRAM } from "./example-program.js";
 import { createConsoleInput } from "./console-input.js";
 import { createConsoleLayout } from "./console-layout.js";
 import { createConsole, formatDuration } from "./console-panel.js";
@@ -243,38 +244,7 @@ try { savedCode = localStorage.getItem(STORAGE_KEY); } catch {}
 /** Program from a shared link (`#code=...`), if the page was opened with one. */
 const sharedCode = await decodeCode(location.hash);
 /** Shared program first, then the saved one, then this default. */
-const startCode = sharedCode ?? (savedCode || `func mouse(int z, int y) {
-    setFigureColor(Color::Red);
-    rectangle(z, y, z+100, y+100);
-    x = x + 10;
-}
-
-func keyboard(int key) {
-    if (key == Key::Space) {
-        setFigureColor(Color::Blue);
-    } else {
-      if (key == Key::A) {
-          setFigureColor(Color::Black);
-      } else {
-          setFigureColor(Color::Yellow);
-      }
-    }
-    x = x - 10;
-}
-
-global {
-    int x = 320;
-}
-
-func main() {
-   setLineColor(Color::Green);
-   for i in (0..10000) {
-      circle(x, 240, i % 100);
-   }
-   rectangle(0, 0, 100, 100);
-}
-
-`);
+const startCode = sharedCode ?? (savedCode || EXAMPLE_PROGRAM);
 
 // ---------------------------------------------------------------------------
 // Background compile (on typing)
