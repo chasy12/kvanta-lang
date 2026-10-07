@@ -757,6 +757,26 @@ describe('console controls', () => {
   });
 });
 
+describe('keyboard forwarding', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('sends the physical key on a Ukrainian layout', async () => {
+    const runBtn = document.getElementById('runBtn');
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+    runBtn.click();
+    await vi.waitFor(() => expect(runBtn.dataset.state).toBe('stop'));
+    try {
+      const canvas = document.getElementById('canvas');
+      canvas.tabIndex = 0; // focusable, as in index.html
+      canvas.focus();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ф', code: 'KeyA' }));
+      expect(mockRuntime.execute_key).toHaveBeenCalledWith('a');
+    } finally {
+      if (runBtn.dataset.state === 'stop') runBtn.click();
+    }
+  });
+});
+
 describe('shareBtn', () => {
   afterEach(() => vi.useRealTimers());
 
