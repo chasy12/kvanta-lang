@@ -54,6 +54,7 @@ import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setI
 import { createFpsCounter } from "./fps-counter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
 import { EXAMPLE_PROGRAM } from "./example-program.js";
+import { programKey } from "./program-key.js";
 import { createConsoleInput } from "./console-input.js";
 import { createConsoleLayout } from "./console-layout.js";
 import { createConsole, formatDuration } from "./console-panel.js";
@@ -473,7 +474,7 @@ function doStop(announce = true) {
 /**
  * Forward a keyboard event key string to the running program's `keyboard` handler.
  *
- * @param {string} key - Key value string (e.g. `"a"`, `"Enter"`, `"ArrowUp"`).
+ * @param {string} key - Key name from `programKey` (e.g. `"a"`, `"Enter"`, `"ArrowUp"`).
  */
 async function executeKey(key) {
   let res = runtime.execute_key(key);
@@ -657,7 +658,7 @@ window.addEventListener('keydown', (e) => {
   if (!runtime) return;
   if (document.activeElement !== canvas) return;
   try {
-    executeKey(e.key); // pass string like 'a', 'Enter', etc.
+    executeKey(programKey(e));
   } catch (err) {
     console.warn('Keyboard runtime error:', err);
   }
