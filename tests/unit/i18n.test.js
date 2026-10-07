@@ -195,7 +195,7 @@ describe('language on reload', () => {
     const i18n = await import('../../web/i18n.js');
     expect(i18n.getLanguage()).toBe('uk');
     expect(() => i18n.setLanguage('uk')).not.toThrow();
-    expect(i18n.t('run')).toBe('Запустити програму!');
+    expect(i18n.t('run')).toBe('Запустити');
   });
 });
 

@@ -4,82 +4,82 @@ import {tags as t} from '@lezer/highlight';
 export const quantaTheme = createTheme({
 	variant: 'dark',
 	settings: {
-		background: '#22272e',
-		foreground: '#adbac7',
-		caret: '#539bf5',
-		selection: '#1a5fb4',
-		lineHighlight: '#8a91991a',
-		gutterBackground: '#22272e',
-		gutterForeground: '#8a919966',
+		background: 'var(--editor-bg)',
+		foreground: 'var(--text)',
+		caret: 'var(--focus)',
+		selection: 'var(--editor-selection)',
+		lineHighlight: 'var(--editor-active-line)',
+		gutterBackground: 'var(--editor-bg)',
+		gutterForeground: 'var(--muted)',
 	},
 	styles: [
 		{
 			tag: t.comment,
-			color: '#787b8099',
+			color: 'var(--syntax-comment)',
 		},
 		{
 			tag: t.variableName,
-			color: '#D3C6AA',
+			color: 'var(--syntax-variable)',
 		},
 		{
 			tag: [t.string, t.special(t.brace)],
-			color: '#D699B6',
+			color: 'var(--syntax-value)',
 		},
 		{
 			tag: t.number,
-			color: '#D699B6',
+			color: 'var(--syntax-value)',
 		},
 		{
 			tag: t.bool,
-			color: '#D699B6',
+			color: 'var(--syntax-value)',
 		},
 		{
 			tag: t.null,
-			color: '#8deedeff',
+			color: 'var(--syntax-keyword)',
 		},
 		{
 			tag: t.keyword,
-			color: '#E67E80',
+			color: 'var(--syntax-keyword)',
 		},
         {
             tag: t.function(t.variableName),
-            color: '#A7C080',
+            color: 'var(--syntax-function)',
         },
         {
             tag: t.paren,
-            color: '#ffea00ff',
+            color: 'var(--syntax-bracket)',
         },
 		{
 			tag: t.operator,
-			color: '#ffbe6f',
+			color: 'var(--syntax-operator)',
 		},
 		{
 			tag: t.moduleKeyword,
-			color: '#80C080',
+			color: 'var(--syntax-function)',
 		},
 		{
 			tag: t.definition(t.typeName),
-			color: '#83c092',
+			color: 'var(--syntax-function)',
 		},
 		{
 			tag: t.typeName,
-			color: '#7FBBB3',
+			color: 'var(--syntax-keyword)',
 		},
         {
 			tag: t.definitionKeyword,
-			color: '#7FBBB3',
+			color: 'var(--syntax-keyword)',
 		},
 		{
 			tag: t.angleBracket,
-			color: '#f9f06b',
+			color: 'var(--syntax-bracket)',
 		},
 		{
 			tag: t.tagName,
-			color: '#5e5c64',
+			color: 'var(--syntax-variable)',
 		},
 		{
 			tag: t.attributeName,
-			color: '#5c6166',
+			color: 'var(--syntax-variable)',
 		},
 	],
 });
