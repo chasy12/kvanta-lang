@@ -247,6 +247,31 @@ print(swapped >= -5 && swapped <= 5, random(7, 7), random(-3, -3));`);
   handlerRuntime.execute_mouse(3, 4);
   await turn();
   handlerRuntime.stop();
+  // Many handler calls pending at once are not nested: each has its own stack budget.
+  for (const [handler, fire] of [['mouse(int x, int y)', rt => rt.execute_mouse(1, 2)], ['keyboard(int key)', rt => rt.execute_key('A')]]) {
+    const sleeping = await compile(`func ${handler} {\n sleep(300);\n circle(5, 5, 3);\n}\nfunc main() {}`);
+    const pendingErrors = [];
+    sleeping.set_renderer(() => {});
+    sleeping.set_error_handler(error => pendingErrors.push(error.get_error_message()));
+    await sleeping.execute();
+    for (let i = 0; i < 400; i++) fire(sleeping);
+    await new Promise(resolve => setTimeout(resolve, 700));
+    assert.deepEqual(pendingErrors, [], `${handler}: queued events must not count as nested calls`);
+    sleeping.stop();
+  }
+  // Recursion inside a handler is still bounded for each call.
+  const keyRecursion = await compile('func keyboard(int key) {\n again(0);\n}\nfunc again(int n) {\n again(n + 1);\n}\nfunc main() {}');
+  const keyErrors = [];
+  keyRecursion.set_renderer(() => {});
+  keyRecursion.set_error_handler(error => keyErrors.push(error.get_error_message()));
+  await keyRecursion.execute();
+  keyRecursion.execute_key('A');
+  keyRecursion.execute_key('B');
+  await turn();
+  await turn();
+  assert.equal(keyErrors.length, 2);
+  for (const message of keyErrors) assert.match(message, recursion);
+  keyRecursion.stop();
   // Deep recursion that ends is fine, up to 100 nested calls for a simple body.
   const sum = await run('func sum(int n) -> int {\n if (n == 0) { return 0; }\n return n + sum(n - 1);\n}\nfunc main() { print(sum(100)); }');
   assert.equal(sum.error.error_code, 0, sum.error.error_code ? sum.error.get_error_message() : '');

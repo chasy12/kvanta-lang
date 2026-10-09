@@ -802,6 +802,8 @@ impl Execution {
     }
 
     pub async fn execute_key(&mut self, key: i32) -> Result<(), Error> {
+        // Handler calls can be pending at the same time; each one is its own call chain.
+        self.stack = Arc::new(StackUse::default());
         if self.functions.contains_key("keyboard") {
             self.call_function("keyboard", vec![int(key, (0,0,0,0))], (0,0,0,0)).await?;
         }
@@ -809,6 +811,8 @@ impl Execution {
     }
 
     pub async fn execute_mouse(&mut self, x: i32, y: i32) -> Result<(), Error> {
+        // Handler calls can be pending at the same time; each one is its own call chain.
+        self.stack = Arc::new(StackUse::default());
         if self.functions.contains_key("mouse") {
             self.call_function("mouse", vec![int(x, (0,0,0,0)), int(y, (0,0,0,0))], (0,0,0,0)).await?;
         }
