@@ -4,8 +4,8 @@
  * The DOM (canvas + logs elements) and the canvas 2D context mock are set up
  * in tests/setup.js which runs before any module is imported.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { drawCommands, cancelNow, colorToCss, isAnimationMode, setPrintHandler, OP } from '../../web/canvas-runtime.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { drawCommands, cancelNow, colorToCss, isAnimationMode, setPrintHandler, setPresentHandler, OP } from '../../web/canvas-runtime.js';
 
 const bufferCtx = globalThis.__mockBufferCtx;
 const drawCtx = globalThis.__mockDrawCtx;
@@ -228,5 +228,38 @@ describe('drawCommands – compositing', () => {
     draw([OP.ANIMATE]);
     draw([], { present: true });
     expect(drawCtx.drawImage).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Present handler
+// ---------------------------------------------------------------------------
+describe('setPresentHandler', () => {
+  const visible = document.getElementById('canvas');
+  let shown;
+
+  beforeEach(() => {
+    shown = vi.fn();
+    setPresentHandler(shown);
+  });
+  afterEach(() => setPresentHandler(() => {}));
+
+  it('is told about each picture shown outside animation mode', () => {
+    draw([OP.CLEAR]);
+    expect(shown).toHaveBeenCalledWith(visible);
+  });
+
+  it('is told only about presented frames in animation mode', () => {
+    draw([OP.ANIMATE]);
+    draw([OP.CLEAR]);
+    expect(shown).not.toHaveBeenCalled();
+    draw([OP.CLEAR], { present: true });
+    expect(shown).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not told anything after the run is cancelled', () => {
+    cancelNow();
+    draw([OP.CLEAR]);
+    expect(shown).not.toHaveBeenCalled();
   });
 });

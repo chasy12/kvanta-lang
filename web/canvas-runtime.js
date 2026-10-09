@@ -57,6 +57,18 @@ export function setPrintHandler(handler) {
   printHandler = handler;
 }
 
+/** Receives the visible canvas each time a new picture is shown on it. */
+let presentHandler = () => {};
+
+/**
+ * Set the function told about each picture shown on the visible canvas.
+ *
+ * @param {(canvas: HTMLCanvasElement) => void} handler
+ */
+export function setPresentHandler(handler) {
+  presentHandler = handler;
+}
+
 /**
  * Reset runtime state before executing a new program and wipe the canvas.
  */
@@ -280,6 +292,7 @@ export function drawCommands(ops, strings, present = false) {
     if (isSafari) {
       drawCanvas.getContext('2d').getImageData(0, 0, 1, 1); // Force repaint
     }
+    presentHandler(drawCanvas);
   }
 }
 
