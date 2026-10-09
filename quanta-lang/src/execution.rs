@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, LinkedList}, sync::{Arc, Mutex}};
+use std::{collections::{HashMap, LinkedList}, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}};
 
 use quanta_parser::{ast::{AstBlock, AstNode, AstProgram, AstStatement, BaseValue, BaseValueType, Coords, Expression, ExpressionType, Operator, Type, UnaryOperator, VariableCall}, error::Error};
 use quanta_parser::ast::BaseType;
@@ -93,7 +93,9 @@ pub struct Execution {
     pub line_width : Arc<Mutex<i32>>,
     pub text_style: Arc<Mutex<TextStyle>>,
     pub random_color: Arc<Mutex<i32>>,
-    pub expanded_arrays: Arc<Mutex<LinkedList<Expression>>>
+    pub expanded_arrays: Arc<Mutex<LinkedList<Expression>>>,
+    /// Stack used by the running code. Each event handler has its own.
+    pub stack: Arc<StackUse>,
 }
 
 #[derive(Debug)]
@@ -224,6 +226,89 @@ fn get_random() -> f64 {
     rng.gen()
 }
 
+/// The interpreter runs on the WASM stack, which is about 1 MB. Code that
+/// nests too deeply overflows it, and then the whole module is dead until the
+/// page is reloaded. Only a recursion without an end can nest that deeply:
+/// the parser limits the nesting of the code itself to 64 levels.
+///
+/// `StackUse` counts the active stack frames in rough units of 0.4 KB, so
+/// the limit holds for any shape of function body: a simple recursion gets
+/// about 140 calls and one with loops and long expressions gets fewer. The
+/// costs below were measured in the WASM build (see `tests/runtime/errors.cjs`).
+#[derive(Debug, Default)]
+pub struct StackUse {
+    units: AtomicUsize,
+    calls: AtomicUsize,
+}
+
+/// Most units that can be in use. About half of what the WASM stack holds
+/// in the worst case, which is a call argument nested in call arguments.
+pub const MAX_STACK_UNITS: usize = 1000;
+pub(crate) const EXPRESSION_UNITS: usize = 1;
+const VALUE_UNITS: usize = 1;
+const BLOCK_UNITS: usize = 3;
+pub(crate) const CALL_UNITS: usize = 2;
+/// A call only starts when this much room is left, so the error is found
+/// at the call, not somewhere in the body of the function.
+pub(crate) const CALL_RESERVE_UNITS: usize = 10;
+
+/// Frees its units when the code it covers ends or is dropped.
+pub(crate) struct StackGuard {
+    stack: Arc<StackUse>,
+    units: usize,
+    call: bool,
+}
+
+impl Drop for StackGuard {
+    fn drop(&mut self) {
+        self.stack.units.fetch_sub(self.units, Ordering::Relaxed);
+        if self.call { self.stack.calls.fetch_sub(1, Ordering::Relaxed); }
+    }
+}
+
+impl StackUse {
+    #[cfg(test)]
+    pub(crate) fn units_in_use(&self) -> usize { self.units.load(Ordering::Relaxed) }
+
+    pub(crate) fn enter(stack: &Arc<StackUse>, units: usize, reserve: usize, call: bool, coords: Coords) -> Result<StackGuard, Error> {
+        let before = stack.units.fetch_add(units, Ordering::Relaxed);
+        if before + units + reserve > MAX_STACK_UNITS {
+            stack.units.fetch_sub(units, Ordering::Relaxed);
+            return Err(Error::runtime(format!(
+                "Too many nested function calls (more than {}). Is there a recursion without an end?",
+                stack.calls.load(Ordering::Relaxed)), coords));
+        }
+        if call { stack.calls.fetch_add(1, Ordering::Relaxed); }
+        Ok(StackGuard { stack: Arc::clone(stack), units, call })
+    }
+}
+
+/// Longest string a program can build, in characters. Doubling a string in a
+/// loop would otherwise exhaust the memory of the whole page.
+pub const MAX_STRING_LENGTH: usize = 1_000_000;
+
+/// Concatenates two strings, or returns `None` when the result would be too long.
+pub fn join_strings(left: &str, right: &str) -> Option<String> {
+    // A string never has fewer bytes than characters, so counting is only needed near the limit.
+    if left.len() + right.len() > MAX_STRING_LENGTH
+        && left.chars().count() + right.chars().count() > MAX_STRING_LENGTH {
+        return None;
+    }
+    let mut joined = String::with_capacity(left.len() + right.len());
+    joined.push_str(left);
+    joined.push_str(right);
+    Some(joined)
+}
+
+/// Picks an int from `lower..=upper` with equal odds for each value.
+/// `unit` is a random number in `[0, 1)`. The width is computed in i64, so
+/// ranges as wide as the whole int type don't overflow.
+pub fn random_in_range(lower: i32, upper: i32, unit: f64) -> i32 {
+    let (lower, upper) = (lower as i64, upper as i64);
+    let offset = ((unit * (upper - lower + 1) as f64).floor() as i64).clamp(0, upper - lower);
+    (lower + offset) as i32
+}
+
 impl Execution {
 
     fn scope_chain(&self) -> Vec<Arc<Mutex<Scope>>> {
@@ -305,7 +390,8 @@ impl Execution {
             line_width: self.line_width.clone(),
             text_style: Arc::clone(&self.text_style),
             random_color: Arc::clone(&self.random_color),
-            expanded_arrays: Arc::clone(&self.expanded_arrays)
+            expanded_arrays: Arc::clone(&self.expanded_arrays),
+            stack: Arc::clone(&self.stack),
         }
     }
 
@@ -448,6 +534,9 @@ impl Execution {
                 let x1 = expect_arg!("circle", vals, 0, Int(v) => *v);
                 let y1 = expect_arg!("circle", vals, 1, Int(v) => *v);
                 let r = expect_arg!("circle", vals, 2, Int(v) => *v);
+                if r < 0 {
+                    return Err(Error::runtime(format!("Radius can't be negative: {}", r), coords));
+                }
 
                 self.canvas.shape(op::CIRCLE, &[x1 as f64, y1 as f64, r as f64], self.style());
                 Ok(None)
@@ -486,6 +575,9 @@ impl Execution {
                 let x = expect_arg!("arc", vals, 0, Int(v) => *v);
                 let y = expect_arg!("arc", vals, 1, Int(v) => *v);
                 let r = expect_arg!("arc", vals, 2, Int(v) => *v);
+                if r < 0 {
+                    return Err(Error::runtime(format!("Radius can't be negative: {}", r), coords));
+                }
                 let start = expect_arg!("arc", vals, 3, Int(v) => *v);
                 let end = expect_arg!("arc", vals, 4, Int(v) => *v);
 
@@ -608,11 +700,7 @@ impl Execution {
                 if lower_bound >= upper_bound {
                     std::mem::swap(&mut lower_bound, &mut upper_bound);
                 }
-                let random_value = (get_random() * ((upper_bound - lower_bound + 1) as f64) + (lower_bound as f64)) as i32;
-                if random_value > upper_bound {
-                    return Ok(Some(int(upper_bound, coords)));
-                }
-                Ok(Some(int(random_value, coords)))
+                Ok(Some(int(random_in_range(lower_bound, upper_bound, get_random()), coords)))
             },
             "len" => {
                 if vals.len() != 1 {
@@ -655,6 +743,7 @@ impl Execution {
                     if params.len() != vals.len() {
                         return Err(Error::runtime(format!("Function {} expects {} arguments, but got {}", name, params.len(), vals.len()), coords));
                     }
+                    let _stack = StackUse::enter(&self.stack, CALL_UNITS, CALL_RESERVE_UNITS, true, coords)?;
                     let mut new_exec = self.create_subfunction();
                     {
                         let mut scope = new_exec.scope.lock().unwrap();
@@ -728,6 +817,7 @@ impl Execution {
 
     pub fn execute_commands<'a>(&'a mut self, nodes: &'a [AstNode]) -> Pin<Box<dyn Future<Output = Result<ControlFlow, Error>> + 'a>> {
         Box::pin(async move {
+            let _stack = StackUse::enter(&self.stack, BLOCK_UNITS, 0, false, nodes.first().map_or((0, 0, 0, 0), |node| node.coords))?;
             self.scheduler.maybe_yield(&self.canvas).await?;
             for line in nodes {
                 match &line.statement {
@@ -823,6 +913,7 @@ impl Execution {
     ) -> Pin<Box<dyn Future<Output = Result<BaseValue, Error>> + 'a>> {
         
         Box::pin(async move {
+            let _stack = StackUse::enter(&self.stack, EXPRESSION_UNITS, 0, false, expr.coords)?;
             match &expr.expr_type {
                 ExpressionType::Value(base_value) => self.calculate_value(base_value, expr.coords).await,
                 ExpressionType::Unary(op, inner) => {
@@ -830,7 +921,8 @@ impl Execution {
                     match op {
                         UnaryOperator::UnaryMinus => {
                             match inner_val.val {
-                                BaseValueType::Int(num) => Ok(int((-1) * num, inner_val.coords)),
+                                BaseValueType::Int(num) => num.checked_neg().map(|value| int(value, inner_val.coords))
+                                    .ok_or_else(|| Error::runtime(String::from("Integer overflow"), expr.coords)),
                                 BaseValueType::Float(num) => Ok(flt((-1.0) * num, inner_val.coords)),
                                 v => Err(Error::runtime(format!("Cannot apply unary minus to: {:?}", v), inner_val.coords))
                             }
@@ -845,11 +937,24 @@ impl Execution {
                     }
                 },
                 ExpressionType::Binary(op, lhs, rhs) => {
-                    let (op, left_val, right_val) = (*op, self.calculate_expression(lhs).await?, self.calculate_expression(rhs).await?);
+                    let op = *op;
+                    let left_val = self.calculate_expression(lhs).await?;
+                    // && and || only evaluate the right side when the left one doesn't decide the result.
+                    if let BaseValueType::Bool(left) = left_val.val {
+                        match op {
+                            Operator::AND if !left => return Ok(bol(false, expr.coords)),
+                            Operator::OR if left => return Ok(bol(true, expr.coords)),
+                            _ => {},
+                        }
+                    }
+                    let right_val = self.calculate_expression(rhs).await?;
 
                     if let (BaseValueType::StringVal(left), BaseValueType::StringVal(right)) = (&left_val.val, &right_val.val) {
                         return match op {
-                            Operator::Plus => Ok(BaseValue { val: BaseValueType::StringVal(format!("{}{}", left, right)), coords: expr.coords }),
+                            Operator::Plus => match join_strings(left, right) {
+                                Some(joined) => Ok(BaseValue { val: BaseValueType::StringVal(joined), coords: expr.coords }),
+                                None => Err(Error::runtime(String::from("String is too long: at most 1000000 characters"), expr.coords)),
+                            },
                             Operator::EQ => Ok(bol(left == right, expr.coords)),
                             Operator::NQ => Ok(bol(left != right, expr.coords)),
                             _ => Err(Error::runtime("Strings support only +, == and !=".into(), expr.coords)),
@@ -896,6 +1001,7 @@ impl Execution {
         coords: Coords,
     ) -> Pin<Box<dyn Future<Output = Result<BaseValue, Error>> + 'a>> {
         Box::pin(async move {
+            let _stack = StackUse::enter(&self.stack, VALUE_UNITS, 0, false, coords)?;
             match &base_value.val {
                 BaseValueType::Id(var) => self.get_variable(var, coords).await,
                 BaseValueType::FunctionCall(name, exprs, _ ) => {
@@ -929,9 +1035,12 @@ fn compare_ints(x: i32, y : i32, op: Operator, coords: Coords) -> Result<BaseVal
         Operator::GQ => return Ok(bol(x >= y, coords)),
         Operator::LQ => return Ok(bol(x <= y, coords)),
         
-        Operator::Plus => Ok(int(x + y, coords)),
-        Operator::Minus => Ok(int(x - y, coords)),
-        Operator::Mult => Ok(int(x * y, coords)),
+        Operator::Plus => x.checked_add(y).map(|value| int(value, coords))
+            .ok_or_else(|| Error::runtime(String::from("Integer overflow"), coords)),
+        Operator::Minus => x.checked_sub(y).map(|value| int(value, coords))
+            .ok_or_else(|| Error::runtime(String::from("Integer overflow"), coords)),
+        Operator::Mult => x.checked_mul(y).map(|value| int(value, coords))
+            .ok_or_else(|| Error::runtime(String::from("Integer overflow"), coords)),
         Operator::Div => {
             if y == 0 {
                 return Err(Error::runtime(String::from("Division by 0"), coords));
