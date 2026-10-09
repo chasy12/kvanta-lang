@@ -18,12 +18,16 @@ const SHARED = 'func main() {\n    print("theirs");\n}\n';
 let view;
 let confirmSpy;
 
-/** Make the address bar carry `hash` and let main.js react to it. */
-async function pasteLink(hash) {
+/**
+ * Make the address bar carry `hash` and let main.js react to it.
+ * Decoding is asynchronous, so wait until `settled` holds (or, for cases where
+ * nothing should happen, a fixed time).
+ */
+async function pasteLink(hash, settled) {
   history.replaceState(null, '', '/' + hash);
   window.dispatchEvent(new HashChangeEvent('hashchange'));
-  // decodeCode is asynchronous.
-  await new Promise(resolve => setTimeout(resolve, 50));
+  if (settled) await vi.waitFor(settled, { timeout: 5000 });
+  else await new Promise(resolve => setTimeout(resolve, 400));
 }
 
 function setEditor(text) {
@@ -47,7 +51,7 @@ afterEach(() => {
 describe('pasting a share link into an open tab', () => {
   it('asks before replacing a different program', async () => {
     setEditor(MINE);
-    await pasteLink(await encodeCode(SHARED));
+    await pasteLink(await encodeCode(SHARED), () => expect(confirmSpy).toHaveBeenCalled());
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect([STRINGS.en.confirmOpenShared, STRINGS.uk.confirmOpenShared]).toContain(confirmSpy.mock.calls[0][0]);
   });
@@ -55,21 +59,21 @@ describe('pasting a share link into an open tab', () => {
   it('replaces the program when the user agrees', async () => {
     setEditor(MINE);
     confirmSpy.mockReturnValue(true);
-    await pasteLink(await encodeCode(SHARED));
+    await pasteLink(await encodeCode(SHARED), () => expect(view.state.doc.toString()).toBe(SHARED));
     expect(view.state.doc.toString()).toBe(SHARED);
   });
 
   it('leaves the editor alone and drops the link when the user declines', async () => {
     setEditor(MINE);
     confirmSpy.mockReturnValue(false);
-    await pasteLink(await encodeCode(SHARED));
+    await pasteLink(await encodeCode(SHARED), () => expect(location.hash).toBe(''));
     expect(view.state.doc.toString()).toBe(MINE);
     expect(location.hash).toBe('');
   });
 
   it('does not ask when the editor is empty', async () => {
     setEditor('  \n');
-    await pasteLink(await encodeCode(SHARED));
+    await pasteLink(await encodeCode(SHARED), () => expect(view.state.doc.toString()).toBe(SHARED));
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toBe(SHARED);
   });
