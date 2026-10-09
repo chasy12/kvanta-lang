@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use quanta_parser::{ast::{keys::key_to_number, AstProgram, AstStatement, Expression}, error::Error};
 
-use crate::{execution::{pack_color, Execution, Scope}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler, input::Input}};
+use crate::{execution::{pack_color, Execution, Scope, StackUse}, program::Program, utils::{canvas::Canvas, message::RuntimeError, scheduler::Scheduler, input::Input}};
 
 use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 use crate::utils::text::TextStyle;
@@ -170,12 +170,14 @@ impl Runtime {
             line_width: Arc::clone(&lin_wid),
             text_style: Arc::new(Mutex::new(TextStyle::default())),
             random_color: Arc::new(Mutex::new(0)),
-            expanded_arrays: Arc::new(Mutex::new(prog.expanded_arrays.clone()))
+            expanded_arrays: Arc::new(Mutex::new(prog.expanded_arrays.clone())),
+            stack: Arc::new(StackUse::default()),
         };
 
         let keyboard_exec = if exec.functions.contains_key("keyboard") {
             let mut c = exec.clone();
             c.scope = Arc::new(Mutex::new(Scope { variables: HashMap::new(), outer_scope: None }));
+            c.stack = Arc::new(StackUse::default());
             Some(c)
         } else { 
             None 
@@ -184,6 +186,7 @@ impl Runtime {
         let mouse_exec = if exec.functions.contains_key("mouse") { 
             let mut c = exec.clone();
             c.scope = Arc::new(Mutex::new(Scope { variables: HashMap::new(), outer_scope: None }));
+            c.stack = Arc::new(StackUse::default());
             Some(c)
         } else { 
             None 
@@ -282,5 +285,125 @@ mod tests {
             let ast = parse_ast(source).unwrap();
             assert!(create_program(ast).type_check().is_ok(), "{}", source);
         }
+    }
+
+    #[test]
+    fn and_and_or_skip_the_right_side_when_the_left_decides() {
+        // The right side divides by zero, so it errors if it runs.
+        assert_eq!(eval_last_init("bool b = false && 1 / 0 == 1;"), Ok(BaseValueType::Bool(false)));
+        assert_eq!(eval_last_init("bool b = true || 1 / 0 == 1;"), Ok(BaseValueType::Bool(true)));
+        assert_eq!(eval_last_init("bool b = 1 > 2 && 1 / 0 == 1 || true;"), Ok(BaseValueType::Bool(true)));
+        assert_eq!(eval_last_init("bool b = 2 > 1 || 1 / 0 == 1 && false;"), Ok(BaseValueType::Bool(true)));
+    }
+
+    #[test]
+    fn and_and_or_still_evaluate_the_right_side_when_needed() {
+        assert!(eval_last_init("bool b = true && 1 / 0 == 1;").unwrap_err().contains("Division by 0"));
+        assert!(eval_last_init("bool b = false || 1 / 0 == 1;").unwrap_err().contains("Division by 0"));
+        assert_eq!(eval_last_init("bool b = true && false;"), Ok(BaseValueType::Bool(false)));
+        assert_eq!(eval_last_init("bool b = true && true;"), Ok(BaseValueType::Bool(true)));
+        assert_eq!(eval_last_init("bool b = false || true;"), Ok(BaseValueType::Bool(true)));
+        assert_eq!(eval_last_init("bool b = false || false;"), Ok(BaseValueType::Bool(false)));
+    }
+
+    #[test]
+    fn int_arithmetic_reports_overflow_instead_of_wrapping() {
+        for source in [
+            "int x = 2147483647 + 1;",
+            "int x = -2147483647 - 2;",
+            "int x = 65536 * 65536;",
+            "int x = 2147483647 * 2;",
+            "int x = -(-2147483647 - 1);",
+            "int x = 479001600 * 13;",
+        ] {
+            let error = eval_last_init(source).unwrap_err();
+            assert!(error.contains("Integer overflow"), "{}: {}", source, error);
+        }
+    }
+
+    #[test]
+    fn int_arithmetic_at_the_limits_is_exact() {
+        assert_eq!(eval_last_init("int x = 2147483646 + 1;"), Ok(BaseValueType::Int(i32::MAX)));
+        assert_eq!(eval_last_init("int x = -2147483647 - 1;"), Ok(BaseValueType::Int(i32::MIN)));
+        assert_eq!(eval_last_init("int x = 46340 * 46340;"), Ok(BaseValueType::Int(2147395600)));
+        assert_eq!(eval_last_init("int x = -(2147483647);"), Ok(BaseValueType::Int(-2147483647)));
+        assert_eq!(eval_last_init("int x = -3 * -4 + -5;"), Ok(BaseValueType::Int(7)));
+    }
+
+    #[test]
+    fn random_covers_every_value_of_a_range_including_negative_ones() {
+        use crate::execution::random_in_range;
+        for (low, high) in [(-5, 5), (-5, -1), (0, 5), (3, 9), (-1, 1), (7, 7), (-2, 0)] {
+            let count = (high - low + 1) as usize;
+            let mut hits = vec![0usize; count];
+            // Sweep the unit interval evenly: each value owns an equal share of it.
+            let steps = 1000 * count;
+            for step in 0..steps {
+                let unit = step as f64 / steps as f64;
+                let value = random_in_range(low, high, unit);
+                assert!(value >= low && value <= high, "{value} outside [{low}, {high}]");
+                hits[(value - low) as usize] += 1;
+            }
+            assert!(hits.iter().all(|hit| *hit == 1000), "{low}..{high}: {hits:?}");
+        }
+    }
+
+    #[test]
+    fn random_does_not_overflow_on_wide_ranges() {
+        use crate::execution::random_in_range;
+        for unit in [0.0, 0.25, 0.5, 0.75, 0.999999999999] {
+            let value = random_in_range(-2_000_000_000, 2_000_000_000, unit);
+            assert!((-2_000_000_000..=2_000_000_000).contains(&value));
+            let value = random_in_range(i32::MIN, i32::MAX, unit);
+            assert!((i32::MIN..=i32::MAX).contains(&value));
+        }
+        assert_eq!(random_in_range(i32::MIN, i32::MAX, 0.0), i32::MIN);
+        assert_eq!(random_in_range(i32::MIN, i32::MAX, 0.9999999999999999), i32::MAX);
+        assert_eq!(random_in_range(-2_000_000_000, 2_000_000_000, 0.0), -2_000_000_000);
+    }
+
+    #[test]
+    fn random_in_range_is_inclusive_at_both_ends() {
+        use crate::execution::random_in_range;
+        assert_eq!(random_in_range(-5, 5, 0.0), -5);
+        assert_eq!(random_in_range(-5, 5, 0.9999999999999999), 5);
+        assert_eq!(random_in_range(0, 1, 0.5), 1);
+    }
+
+    #[test]
+    fn long_strings_are_rejected() {
+        use crate::execution::{join_strings, MAX_STRING_LENGTH};
+        assert_eq!(join_strings("ab", "cd").as_deref(), Some("abcd"));
+        let half = "x".repeat(MAX_STRING_LENGTH / 2);
+        assert_eq!(join_strings(&half, &half).map(|s| s.chars().count()), Some(MAX_STRING_LENGTH));
+        assert_eq!(join_strings(&half, &format!("{half}y")), None);
+        // Characters count, not bytes.
+        let cyrillic = "ї".repeat(MAX_STRING_LENGTH);
+        assert_eq!(join_strings(&cyrillic, ""), Some(cyrillic.clone()));
+        assert_eq!(join_strings(&cyrillic, "ї"), None);
+    }
+
+    #[test]
+    fn stack_budget_is_returned_when_code_ends_and_refuses_calls_at_the_limit() {
+        use crate::execution::{StackUse, CALL_RESERVE_UNITS, CALL_UNITS, EXPRESSION_UNITS, MAX_STACK_UNITS};
+        use std::sync::Arc;
+        let stack = Arc::new(StackUse::default());
+        let mut calls = vec![];
+        let error = loop {
+            match StackUse::enter(&stack, CALL_UNITS, CALL_RESERVE_UNITS, true, (1, 1, 1, 2)) {
+                Ok(guard) => calls.push(guard),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error.message, format!("Too many nested function calls (more than {}). Is there a recursion without an end?", calls.len()));
+        assert_eq!((error.start, error.finish), ((1, 1), (1, 2)));
+        assert!(calls.len() >= 100, "{} calls", calls.len());
+        assert!(stack.units_in_use() + CALL_RESERVE_UNITS <= MAX_STACK_UNITS);
+        // Plain expressions can still use the reserve, and everything is freed in the end.
+        let inner = StackUse::enter(&stack, EXPRESSION_UNITS, 0, false, (0, 0, 0, 0)).unwrap();
+        drop(inner);
+        drop(calls);
+        assert_eq!(stack.units_in_use(), 0);
+        assert!(StackUse::enter(&stack, CALL_UNITS, CALL_RESERVE_UNITS, true, (0, 0, 0, 0)).is_ok());
     }
 }
