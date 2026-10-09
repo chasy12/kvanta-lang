@@ -8,12 +8,16 @@
  *   - Colors in printed text (`color(r, g, b, a)`) get a swatch.
  *   - Errors show their line; clicking it calls `onJump(row, column)`.
  *   - Problems from the latest check replace the previous check's problems.
- *   - Only the last `maxEntries` lines are kept.
+ *   - Only the last `maxEntries` lines are kept, and a printed line longer than
+ *     `MAX_LINE_CHARS` is cut and says how much was left out.
  *   - Lines are stored as data and re-rendered by `render()`, so they follow
  *     a language switch.
  */
 
 import { t, translateError, errorKind, getLanguage } from './i18n.js';
+
+/** Longest printed line kept and shown, in characters. Longer ones freeze the page. */
+export const MAX_LINE_CHARS = 10_000;
 
 const COLOR_PATTERN = /color\((\d+), (\d+), (\d+), (\d+)\)/g;
 
@@ -64,13 +68,29 @@ function appendPrinted(parent, text) {
 }
 
 /**
+ * Cut `text` to `MAX_LINE_CHARS`, never in the middle of a character.
+ *
+ * @param {string} text
+ * @returns {{ text: string, omitted: number }} The kept text and how many characters were dropped.
+ */
+function limitLine(text) {
+  if (text.length <= MAX_LINE_CHARS) return { text, omitted: 0 };
+  let end = MAX_LINE_CHARS;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  // `split`/`join` copies the kept part, so the huge original can be freed
+  // (a plain `slice` would keep it alive).
+  return { text: text.slice(0, end).split('').join(''), omitted: text.length - end };
+}
+
+/**
  * Create the console in the list element `el`.
  *
  * @param {HTMLElement} el
  * @param {{ onJump?: (row: number, column: number) => void, maxEntries?: number, now?: () => number, onActivity?: (kind: string) => void }} [options]
  */
 export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = () => performance.now(), onActivity = () => {} } = {}) {
-  /** @type {Array<{ kind: string, problem?: boolean, time: number, text?: string, count?: number, key?: string, params?: any[], code?: number, message?: string, row?: number, column?: number, node?: HTMLElement }>} */
+  /** @type {Array<{ kind: string, problem?: boolean, time: number, text?: string, omitted?: number, count?: number, key?: string, params?: any[], code?: number, message?: string, row?: number, column?: number, node?: HTMLElement }>} */
   let entries = [];
   let startedAt = now();
 
@@ -88,6 +108,7 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
 
     if (entry.kind === 'print') {
       appendPrinted(body, entry.text);
+      if (entry.omitted) body.append('…' + t('moreChars', entry.omitted));
     } else if (entry.kind === 'info') {
       body.textContent = t(entry.key, ...entry.params.map(param => (typeof param === 'function' ? param() : param)));
     } else {
@@ -168,15 +189,17 @@ export function createConsole(el, { onJump = () => {}, maxEntries = 1000, now = 
 
     /** Add a line of program output. */
     print(text) {
+      const limited = limitLine(text);
+      text = limited.text;
       const last = entries[entries.length - 1];
-      if (last?.kind === 'print' && last.text === text) {
+      if (last?.kind === 'print' && last.text === text && last.omitted === limited.omitted) {
         last.count += 1;
         onActivity('print');
         if (last.node) stale.add(last);
         schedule();
         return;
       }
-      add({ kind: 'print', text, count: 1 });
+      add({ kind: 'print', text, omitted: limited.omitted, count: 1 });
     },
 
     /**
