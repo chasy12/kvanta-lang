@@ -5,7 +5,7 @@
  * in tests/setup.js which runs before any module is imported.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { drawCommands, cancelNow, colorToCss, isAnimationMode, setPrintHandler, setPresentHandler, OP } from '../../web/canvas-runtime.js';
+import { drawCommands, setup, cancelNow, colorToCss, isAnimationMode, setPrintHandler, setPresentHandler, OP } from '../../web/canvas-runtime.js';
 
 const bufferCtx = globalThis.__mockBufferCtx;
 const drawCtx = globalThis.__mockDrawCtx;
@@ -261,5 +261,66 @@ describe('setPresentHandler', () => {
     cancelNow();
     draw([OP.CLEAR]);
     expect(shown).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bad shapes must not lose the rest of the batch
+// ---------------------------------------------------------------------------
+describe('drawCommands – survives a bad shape', () => {
+  beforeEach(() => { setup(); clearMocks(); });
+  afterEach(() => {
+    bufferCtx.arc.mockReset();
+    vi.restoreAllMocks();
+    setPrintHandler((text) => console.log(text));
+  });
+
+  it('skips a circle with a negative radius', () => {
+    draw([OP.CIRCLE, 100, 100, -5]);
+    expect(bufferCtx.arc).not.toHaveBeenCalled();
+    expect(bufferCtx.fill).not.toHaveBeenCalled();
+  });
+
+  it('skips an arc with a negative radius', () => {
+    draw([OP.ARC, 100, 100, -5, 0, 90]);
+    expect(bufferCtx.arc).not.toHaveBeenCalled();
+  });
+
+  it('keeps drawing and printing after a negative-radius circle', () => {
+    const printed = vi.fn();
+    setPrintHandler(printed);
+    draw([OP.CIRCLE, 1, 1, -1, OP.RECTANGLE, 0, 0, 10, 10, OP.PRINT, 0], { strings: ['after'] });
+    expect(bufferCtx.fillRect).toHaveBeenCalledOnce();
+    expect(printed).toHaveBeenCalledWith('after');
+  });
+
+  it('keeps going when an operation throws, and warns once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const printed = vi.fn();
+    setPrintHandler(printed);
+    bufferCtx.arc.mockImplementation(() => { throw new DOMException('bad', 'IndexSizeError'); });
+    draw([
+      OP.CIRCLE, 1, 1, 5,
+      OP.CIRCLE, 2, 2, 5,
+      OP.RECTANGLE, 0, 0, 10, 10,
+      OP.PRINT, 0,
+    ], { strings: ['still here'] });
+    expect(bufferCtx.fillRect).toHaveBeenCalledOnce();
+    expect(printed).toHaveBeenCalledWith('still here');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('balances save and restore even when an operation throws', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bufferCtx.arc.mockImplementation(() => { throw new Error('boom'); });
+    draw([OP.CIRCLE, 1, 1, 5]);
+    expect(bufferCtx.restore.mock.calls.length).toBe(bufferCtx.save.mock.calls.length);
+  });
+
+  it('still shows the picture after a throwing operation', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bufferCtx.arc.mockImplementation(() => { throw new Error('boom'); });
+    draw([OP.CIRCLE, 1, 1, 5]);
+    expect(drawCtx.drawImage).toHaveBeenCalled();
   });
 });

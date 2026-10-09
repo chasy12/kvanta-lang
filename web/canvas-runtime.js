@@ -73,6 +73,7 @@ export function setPresentHandler(handler) {
  * Reset runtime state before executing a new program and wipe the canvas.
  */
 export function setup() {
+  warnedAboutBadOperation = false;
   clearCanvas();
 }
 
@@ -174,6 +175,122 @@ export function isAnimationMode() {
   return isAnimation;
 }
 
+/** Set once a drawing operation has failed, so a run warns once, not per frame. */
+let warnedAboutBadOperation = false;
+
+/**
+ * Number of entries the operation at `ops[i]` takes, or `NaN` when it is unknown.
+ *
+ * @param {ArrayLike<number>} ops
+ * @param {number} i
+ * @returns {number}
+ */
+function operationLength(ops, i) {
+  switch (ops[i]) {
+    case OP.CLEAR:
+    case OP.ANIMATE: return 1;
+    case OP.CIRCLE:
+    case OP.STYLE: return 4;
+    case OP.RECTANGLE:
+    case OP.LINE: return 5;
+    case OP.ARC: return 6;
+    case OP.POLYGON: return 2 + ops[i + 1];
+    case OP.PRINT: return 2;
+    case OP.TEXT: return 11;
+    default: return NaN;
+  }
+}
+
+/**
+ * Execute the single drawing operation at `ops[i]` on the buffer canvas.
+ *
+ * @param {ArrayLike<number>} ops
+ * @param {string[]} strings
+ * @param {number} i
+ */
+function runOperation(ops, strings, i) {
+  switch (ops[i]) {
+    case OP.CLEAR:
+      clearCanvas();
+      break;
+    case OP.ANIMATE:
+      isAnimation = true;
+      break;
+    case OP.STYLE:
+      ctx.fillStyle = colorToCss(ops[i + 1]);
+      ctx.strokeStyle = colorToCss(ops[i + 2]);
+      ctx.lineWidth = ops[i + 3];
+      break;
+    case OP.CIRCLE:
+      // A negative radius makes `arc` throw; the interpreter reports it as an error.
+      if (ops[i + 3] < 0) { break; }
+      ctx.beginPath();
+      ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    case OP.RECTANGLE: {
+      const x = ops[i + 1], y = ops[i + 2], w = ops[i + 3] - x, h = ops[i + 4] - y;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      break;
+    }
+    case OP.LINE:
+      ctx.beginPath();
+      ctx.moveTo(ops[i + 1], ops[i + 2]);
+      ctx.lineTo(ops[i + 3], ops[i + 4]);
+      ctx.stroke();
+      break;
+    case OP.ARC:
+      if (ops[i + 3] < 0) { break; }
+      ctx.beginPath();
+      ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], deg2rad(ops[i + 4]), deg2rad(ops[i + 5]));
+      ctx.fill();
+      ctx.stroke();
+      break;
+    case OP.POLYGON: {
+      const n = ops[i + 1];
+      const first = i + 2;
+      ctx.beginPath();
+      ctx.moveTo(ops[first], ops[first + 1]);
+      for (let p = first + 2; p < first + n; p += 2) {
+        ctx.lineTo(ops[p], ops[p + 1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case OP.PRINT:
+      printHandler(strings[ops[i + 1]]);
+      break;
+    case OP.TEXT: {
+      const x = ops[i + 1], y = ops[i + 2];
+      const content = strings[ops[i + 3]];
+      const size = ops[i + 5];
+      const font = strings[ops[i + 6]];
+      const genericFonts = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded'];
+      const family = genericFonts.includes(font) ? font : `"${font.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      ctx.save();
+      try {
+        ctx.fillStyle = colorToCss(ops[i + 4]);
+        ctx.font = `${ops[i + 9] ? 'italic' : 'normal'} ${ops[i + 8] ? 'bold' : 'normal'} ${size}px ${family}`;
+        ctx.textAlign = strings[ops[i + 7]];
+        ctx.textBaseline = 'top';
+        const lines = content.split(/\r\n|\n|\r/);
+        for (let line = 0; line < lines.length; line++) {
+          ctx.fillText(lines[line], x, y + line * size * ops[i + 10]);
+        }
+      } finally {
+        ctx.restore();
+      }
+      break;
+    }
+    default:
+      console.warn('Unknown drawing operation', ops[i], 'at', i);
+  }
+}
+
 /**
  * Execute a buffer of drawing operations on the buffer canvas, then
  * composite to the visible canvas when appropriate.
@@ -191,98 +308,27 @@ export function isAnimationMode() {
  */
 export function drawCommands(ops, strings, present = false) {
   if (isCancelled) { return; }
-  ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-
-  let i = 0;
-  while (i < ops.length) {
-    switch (ops[i]) {
-      case OP.CLEAR:
-        clearCanvas();
-        i += 1;
-        break;
-      case OP.ANIMATE:
-        isAnimation = true;
-        i += 1;
-        break;
-      case OP.STYLE:
-        ctx.fillStyle = colorToCss(ops[i + 1]);
-        ctx.strokeStyle = colorToCss(ops[i + 2]);
-        ctx.lineWidth = ops[i + 3];
-        i += 4;
-        break;
-      case OP.CIRCLE:
-        ctx.beginPath();
-        ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        i += 4;
-        break;
-      case OP.RECTANGLE: {
-        const x = ops[i + 1], y = ops[i + 2], w = ops[i + 3] - x, h = ops[i + 4] - y;
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-        i += 5;
-        break;
-      }
-      case OP.LINE:
-        ctx.beginPath();
-        ctx.moveTo(ops[i + 1], ops[i + 2]);
-        ctx.lineTo(ops[i + 3], ops[i + 4]);
-        ctx.stroke();
-        i += 5;
-        break;
-      case OP.ARC:
-        ctx.beginPath();
-        ctx.arc(ops[i + 1], ops[i + 2], ops[i + 3], deg2rad(ops[i + 4]), deg2rad(ops[i + 5]));
-        ctx.fill();
-        ctx.stroke();
-        i += 6;
-        break;
-      case OP.POLYGON: {
-        const n = ops[i + 1];
-        const first = i + 2;
-        ctx.beginPath();
-        ctx.moveTo(ops[first], ops[first + 1]);
-        for (let p = first + 2; p < first + n; p += 2) {
-          ctx.lineTo(ops[p], ops[p + 1]);
+  ctx.save();
+  try {
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    let i = 0;
+    while (i < ops.length) {
+      // Where the next operation starts, so a failing one is skipped, not retried.
+      let next = i + operationLength(ops, i);
+      if (!(next > i)) { next = ops.length; }
+      try {
+        runOperation(ops, strings, i);
+      } catch (error) {
+        if (!warnedAboutBadOperation) {
+          warnedAboutBadOperation = true;
+          console.warn('Drawing operation', ops[i], 'at', i, 'failed and was skipped:', error);
         }
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        i += 2 + n;
-        break;
       }
-      case OP.PRINT:
-        printHandler(strings[ops[i + 1]]);
-        i += 2;
-        break;
-      case OP.TEXT: {
-        const x = ops[i + 1], y = ops[i + 2];
-        const content = strings[ops[i + 3]];
-        const size = ops[i + 5];
-        const font = strings[ops[i + 6]];
-        const genericFonts = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded'];
-        const family = genericFonts.includes(font) ? font : `"${font.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-        ctx.save();
-        ctx.fillStyle = colorToCss(ops[i + 4]);
-        ctx.font = `${ops[i + 9] ? 'italic' : 'normal'} ${ops[i + 8] ? 'bold' : 'normal'} ${size}px ${family}`;
-        ctx.textAlign = strings[ops[i + 7]];
-        ctx.textBaseline = 'top';
-        const lines = content.split(/\r\n|\n|\r/);
-        for (let line = 0; line < lines.length; line++) {
-          ctx.fillText(lines[line], x, y + line * size * ops[i + 10]);
-        }
-        ctx.restore();
-        i += 11;
-        break;
-      }
-      default:
-        console.warn('Unknown drawing operation', ops[i], 'at', i);
-        i = ops.length;
+      i = next;
     }
+  } finally {
+    ctx.restore();
   }
-
-  ctx.restore();
 
   // Composite the buffer onto the visible canvas.
   // In animation mode, only do this when explicitly requested (i.e. per-frame).
