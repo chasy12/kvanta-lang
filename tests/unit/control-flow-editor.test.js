@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CompletionContext } from '@codemirror/autocomplete';
 import { EditorState } from '@codemirror/state';
+import { toggleLineComment } from '@codemirror/commands';
 import { highlightTree, tagHighlighter, tags } from '@lezer/highlight';
 import { parser } from '../../grammar/grammar.js';
 import { quanta } from '../../web/quanta-support.ts';
@@ -62,5 +63,19 @@ describe('control flow and arrays in the editor', () => {
     const sources = state.languageDataAt('autocomplete', source.length);
     const completions = await Promise.all(sources.map(completion => completion(context)));
     expect(completions.flatMap(result => result?.options ?? []).map(item => item.label)).toContain(label);
+  });
+
+  it('declares // as the line comment token', () => {
+    const state = EditorState.create({ doc: 'x', extensions: [quanta()] });
+    expect(state.languageDataAt('commentTokens', 0)[0]).toEqual({ line: '//' });
+  });
+
+  it('toggles a line comment with // and removes it again', () => {
+    let state = EditorState.create({ doc: 'circle(1, 2, 3);', extensions: [quanta()] });
+    const run = () => toggleLineComment({ state, dispatch: tr => { state = tr.state; } });
+    run();
+    expect(state.doc.toString()).toBe('// circle(1, 2, 3);');
+    run();
+    expect(state.doc.toString()).toBe('circle(1, 2, 3);');
   });
 });
