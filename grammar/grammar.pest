@@ -1,7 +1,7 @@
  document      =  { SOI ~ source_file ~ EOI }
 source_file   =  _{ forest | block }
 block         =  { statement* }
-global_block  =  { "global" ~ "{" ~ strong_init* ~"}" }
+global_block  =  { kw_global ~ "{" ~ strong_init* ~"}" }
 strong_init   =  { (sized_declaration | type_name ~ initialization) ~ ";"}
 
 forest 		  = { (function | global_block)+ }
@@ -11,7 +11,7 @@ WHITESPACE    = _{ " " | "\t" | "\n" | "\r" }
 
 fn_arg  = {type_name ~ ident ~ array_dimension*}
 fn_arg_list = {(fn_arg ~ ("," ~ fn_arg)*)?}
-fn_header = { "func" ~ ident ~ "(" ~ fn_arg_list ~ ")" ~ ("->" ~ type_name)? }
+fn_header = { kw_func ~ ident ~ "(" ~ fn_arg_list ~ ")" ~ ("->" ~ type_name)? }
 function      =  { fn_header ~ "{" ~ block ~ "}" }
 
 statement      =  { (command | init_statement | if_statement | for_statement | while_statement | return_statement | break_statement | continue_statement) }
@@ -24,36 +24,34 @@ init_statement =  { (sized_declaration | type_name? ~ initialization) ~ ";" }
 sized_declaration = { type_name ~ ident ~ array_dimension+ ~ ("=" ~ expression)? }
 array_dimension = { "[" ~ integer ~ "]" }
 initialization =  { noun ~ "=" ~ expression }
-const_key      =  {"const"}
+const_key      = @{ "const" ~ !ident_char }
 
-if_statement    =  { "if" ~ "(" ~ expression ~ ")" ~ bracket_block ~ else_block?}
-else_block      = _{ "else" ~ (if_statement | bracket_block) }
-for_statement   =  { "for" ~ ident ~ "in" ~ (range | expression) ~ bracket_block }
+if_statement    =  { kw_if ~ "(" ~ expression ~ ")" ~ bracket_block ~ else_block?}
+else_block      = _{ kw_else ~ (if_statement | bracket_block) }
+for_statement   =  { kw_for ~ ident ~ kw_in ~ (range | expression) ~ bracket_block }
 range           =  { "(" ~ expression ~ ".." ~ expression ~ ")" }
 numVar          = _{ integer | noun }
-while_statement =  { "while" ~ "(" ~ expression ~ ")" ~ bracket_block }
-return_statement = { "return" ~ expression ~ ";" }
-break_statement = { "break" ~ ";" }
-continue_statement = { "continue" ~ ";" }
+while_statement =  { kw_while ~ "(" ~ expression ~ ")" ~ bracket_block }
+return_statement = { kw_return ~ expression ~ ";" }
+break_statement = { kw_break ~ ";" }
+continue_statement = { kw_continue ~ ";" }
 
 type_name      =  { const_key? ~ (array_type | primitive_type) }
-primitive_type = { "bool" | "int" | "color" | "float" | "string" }
+primitive_type = @{ ("bool" | "int" | "color" | "float" | "string") ~ !ident_char }
 array_type   = { "array<" ~ type_name ~ "," ~ integer ~ ">" }
 
 number     = { decimal | integer }
-expression = {
-	dyadicExpr
-  | monadicExpr
-  | term
-}
+// One operand, optionally followed by an operator and the rest. The operand is
+// parsed once: a separate dyadic alternative would parse it again on failure,
+// which made nested parentheses and calls take exponential time.
+expression = { (monadicExpr | term) ~ (operator ~ expression)? }
 
 monadicExpr  = { operator ~ term }
-dyadicExpr   = { (monadicExpr | term) ~ operator ~ expression }
 parenth_expr = { "(" ~ expression ~ ")" }
 
 box = {"[" ~ expression ~ "]" }
 noun = {ident ~ box* }
-term = _{ decimal | integer | string_literal | color | boolean | key | function_call | noun | array_literal | expanded_array_literal | parenth_expr }
+term = _{ decimal | integer | string_literal | color | boolean | key | function_call | noun | array_literal | parenth_expr }
 
 operator = {
   | "+"
@@ -72,12 +70,43 @@ operator = {
   | "!"
 }
 string_literal = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
-array_literal = { "{" ~ (term ~ ("," ~ term)*)?  ~ "}" }
-expanded_array_literal = { "{" ~ term ~ "..." ~ "}" }
-boolean = { "true" | "false" }
+// `{1, 2, 3}` and `{0...}` share one rule, so that the first element is parsed
+// once. Separate rules for the two forms parse it twice, and nested `{{0...}...}`
+// then takes exponential time. The builder tells them apart by `expand_mark`.
+array_literal = { "{" ~ (term ~ (expand_mark | ("," ~ term)*))?  ~ "}" }
+expand_mark = { "..." }
+boolean = @{ ("true" | "false") ~ !ident_char }
 color = @{"Color::" ~ ident}
 key   = @{"Key::" ~ ident}
 integer = @{ "-"? ~ ASCII_DIGIT+ }
 decimal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 ident   = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+
+// Word keywords. Each one must end at a word boundary, so that `interval`,
+// `format` or `inside` are plain identifiers and not `int erval`, `for mat`
+// or `in side`. The boundary test is a negative lookahead on an atomic rule
+// that contains the keyword and the word character after it: that way no
+// whitespace is skipped before the test, no tokens end up in the parse tree,
+// and the helper rules are never named in syntax error messages.
+ident_char  = _{ ASCII_ALPHANUMERIC | "_" }
+kw_global   = _{ !longer_global ~ "global" }
+kw_func     = _{ !longer_func ~ "func" }
+kw_if       = _{ !longer_if ~ "if" }
+kw_else     = _{ !longer_else ~ "else" }
+kw_for      = _{ !longer_for ~ "for" }
+kw_in       = _{ !longer_in ~ "in" }
+kw_while    = _{ !longer_while ~ "while" }
+kw_return   = _{ !longer_return ~ "return" }
+kw_break    = _{ !longer_break ~ "break" }
+kw_continue = _{ !longer_continue ~ "continue" }
+longer_global   = @{ "global" ~ ident_char }
+longer_func     = @{ "func" ~ ident_char }
+longer_if       = @{ "if" ~ ident_char }
+longer_else     = @{ "else" ~ ident_char }
+longer_for      = @{ "for" ~ ident_char }
+longer_in       = @{ "in" ~ ident_char }
+longer_while    = @{ "while" ~ ident_char }
+longer_return   = @{ "return" ~ ident_char }
+longer_break    = @{ "break" ~ ident_char }
+longer_continue = @{ "continue" ~ ident_char }
