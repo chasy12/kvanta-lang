@@ -134,7 +134,7 @@ export const QuantaLanguage = LRLanguage.define({
     ]
   }),
   languageData: {
-    commentTokens: {line: ";"},
+    commentTokens: {line: "//"},
   }
 })
 
