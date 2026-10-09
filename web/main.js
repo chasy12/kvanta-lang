@@ -260,8 +260,29 @@ let savedCode = null;
 try { savedCode = localStorage.getItem(STORAGE_KEY); } catch {}
 /** Program from a shared link (`#code=...`), if the page was opened with one. */
 const sharedCode = await decodeCode(location.hash);
-/** Shared program first, then the saved one, then this default. */
-const startCode = sharedCode ?? (savedCode || EXAMPLE_PROGRAM);
+
+/** Remove a `#code=...` link from the address bar. */
+function dropSharedHash() {
+  if (isSharedHash(location.hash)) {
+    window.history.replaceState(null, "", location.pathname + location.search);
+  }
+}
+
+/**
+ * Whether a shared program may replace `current`, the program the user has now.
+ * Nothing to lose (blank, or the same program) means yes; otherwise the user is asked.
+ */
+function mayReplaceWith(current, shared) {
+  if (!current?.trim() || current.trimEnd() === shared.trimEnd()) return true;
+  return confirm(t("confirmOpenShared"));
+}
+
+/** The saved program, then this default; a shared program only if the user lets it replace the saved one. */
+let startCode = savedCode || EXAMPLE_PROGRAM;
+if (sharedCode !== null) {
+  if (mayReplaceWith(savedCode, sharedCode)) startCode = sharedCode;
+  else dropSharedHash();
+}
 
 // ---------------------------------------------------------------------------
 // Background compile (on typing)
@@ -306,9 +327,7 @@ const onTyping = EditorView.updateListener.of(update => {
     update.view.dispatch(setDiagnostics(update.state, []));
     // Once the shared program is edited it is the user's own: drop the link
     // from the address bar so a reload shows the saved edits.
-    if (isSharedHash(location.hash)) {
-      window.history.replaceState(null, "", location.pathname + location.search);
-    }
+    dropSharedHash();
     clearTimeout(typingTimer);
 
     // schedule a new one
@@ -766,6 +785,10 @@ shareBtn.addEventListener('click', async () => {
 window.addEventListener('hashchange', async () => {
   const code = await decodeCode(location.hash);
   if (code === null) return;
+  if (!mayReplaceWith(editor.state.doc.toString(), code)) {
+    dropSharedHash();
+    return;
+  }
   editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: code } });
 });
 

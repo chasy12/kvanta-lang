@@ -205,3 +205,10 @@ it('translates new parser rules while preserving the quoted source', () => {
   expect(translateError("ERROR expected array_dimension or named_argument on line 'text(1, 2, named_argument)'"))
     .toBe("Помилка: очікується розмір масиву або іменований аргумент у рядку 'text(1, 2, named_argument)'");
 });
+
+describe('shared program prompt', () => {
+  it('is worded in both languages', () => {
+    expect(STRINGS.en.confirmOpenShared).toBe('Open the shared program? It will replace your program saved in this browser.');
+    expect(STRINGS.uk.confirmOpenShared).toBe('Відкрити програму з посилання? Вона замінить вашу програму, збережену в цьому браузері.');
+  });
+});
