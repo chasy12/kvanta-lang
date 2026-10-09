@@ -2,7 +2,7 @@
  * Tests for web/gif/recorder.js with a fake worker, a fake canvas and fake timers.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createRecorder, GIF_SIZE } from '../../web/gif/recorder.js';
+import { createRecorder, GIF_SIZE, MAX_FRAMES_IN_FLIGHT } from '../../web/gif/recorder.js';
 
 function setup({ createWorker } = {}) {
   const worker = { postMessage: vi.fn(), terminate: vi.fn(), onmessage: null, onerror: null };
@@ -77,24 +77,27 @@ describe('createRecorder', () => {
   });
 
   it('marks a frame when the user was waited on since the previous one', () => {
-    const { recorder, frames } = setup();
+    const { recorder, frames, reply } = setup();
     recorder.start();
     recorder.present('a');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
     recorder.setWaitingForUser(true);
     vi.advanceTimersByTime(50);
     recorder.setWaitingForUser(false);
     recorder.present('b');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
     vi.advanceTimersByTime(50);
     recorder.present('c');
     expect(frames().map(frame => frame.userWaited)).toEqual([false, true, false]);
   });
 
   it('marks every frame while the user is still being waited on', () => {
-    const { recorder, frames } = setup();
+    const { recorder, frames, reply } = setup();
     recorder.start();
     recorder.setWaitingForUser(true);
     for (let i = 0; i < 3; i++) {
       recorder.present(`key ${i}`);
+      reply({ type: 'stats', run: 1, stats: encoderStats() });
       vi.advanceTimersByTime(1000);
     }
     expect(frames().map(frame => frame.userWaited)).toEqual([true, true, true]);
@@ -262,7 +265,7 @@ describe('createRecorder', () => {
     const { recorder, reply } = setup();
     recorder.start();
     reply({ type: 'stats', run: 1, stats: encoderStats() });
-    reply({ type: 'error', message: 'bad frame' });
+    reply({ type: 'error', run: 1, message: 'bad frame' });
     expect(recorder.canSave()).toBe(false);
   });
 
@@ -273,5 +276,158 @@ describe('createRecorder', () => {
     recorder.start();
     expect(() => recorder.present('a')).not.toThrow();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('backpressure', () => {
+  it('posts no more than MAX_FRAMES_IN_FLIGHT frames while the worker has not answered', () => {
+    const { recorder, frames, reply, context } = setup();
+    expect(MAX_FRAMES_IN_FLIGHT).toBe(2);
+    recorder.start();
+    for (let i = 0; i <= 25; i++) {
+      recorder.present(`picture ${i}`);
+      vi.advanceTimersByTime(40);
+    }
+    expect(frames()).toHaveLength(2);
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    expect(frames()).toHaveLength(3);
+    expect(frames()[2].t).toBe(1040);
+    expect(context.drawImage).toHaveBeenLastCalledWith('picture 25', 0, 0, 500, 500);
+  });
+
+  it('waits for the next slot when an answer comes before the capture interval has passed', () => {
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    vi.advanceTimersByTime(40);
+    recorder.present('c');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    expect(frames()).toHaveLength(2 + 1);
+    expect(frames()[2].t).toBe(80);
+    recorder.present('d');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    expect(frames()).toHaveLength(3);
+    vi.advanceTimersByTime(33);
+    expect(frames()).toHaveLength(4);
+    expect(frames()[3].t).toBe(113);
+  });
+
+  it('does not free a slot for an answer from an earlier run', () => {
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    vi.advanceTimersByTime(40);
+    recorder.present('c');
+    expect(frames()).toHaveLength(2);
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    expect(frames()).toHaveLength(2);
+    reply({ type: 'stats', run: 2, stats: encoderStats() });
+    expect(frames()).toHaveLength(3);
+  });
+
+  it('starts every run with free slots', () => {
+    const { recorder, frames } = setup();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    recorder.start();
+    recorder.present('c');
+    expect(frames().map(frame => frame.t)).toEqual([0, 40, 40]);
+  });
+
+  it('still records the final picture on stop when the worker is behind', () => {
+    const { recorder, frames, context } = setup();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    vi.advanceTimersByTime(40);
+    recorder.present('last');
+    expect(frames()).toHaveLength(2);
+    vi.advanceTimersByTime(60);
+    recorder.stop();
+    expect(frames().map(frame => frame.t)).toEqual([0, 40, 140]);
+    expect(context.drawImage).toHaveBeenLastCalledWith('last', 0, 0, 500, 500);
+  });
+
+  it('includes the final picture in a save when the worker is behind', () => {
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    vi.advanceTimersByTime(40);
+    recorder.present('c');
+    vi.advanceTimersByTime(40);
+    recorder.present('d');
+    recorder.save(130);
+    expect(frames().map(frame => frame.t)).toEqual([0, 40, 80, 130]);
+  });
+
+  it('stops asking for captures when the encoder fails', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    vi.advanceTimersByTime(40);
+    recorder.present('b');
+    vi.advanceTimersByTime(40);
+    recorder.present('c');
+    reply({ type: 'error', run: 1, message: 'bad frame' });
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    vi.advanceTimersByTime(100);
+    expect(frames()).toHaveLength(2);
+  });
+});
+
+describe('waits around a save', () => {
+  it('counts the gap after a save as a wait for the user', () => {
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    vi.advanceTimersByTime(500);
+    recorder.save(500);
+    vi.advanceTimersByTime(4000);
+    recorder.present('b');
+    expect(frames().map(frame => frame.userWaited)).toEqual([false, true]);
+  });
+
+  it('does not mark a save that ends the clip before the prompt', () => {
+    const { recorder, messages, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    recorder.save(100);
+    expect(messages().at(-1)).toMatchObject({ type: 'save', userWaited: false });
+  });
+
+  it('does not mark later frames after a save once recording has stopped', () => {
+    const { recorder, frames, reply } = setup();
+    recorder.start();
+    recorder.present('a');
+    reply({ type: 'stats', run: 1, stats: encoderStats() });
+    recorder.stop();
+    recorder.save();
+    recorder.present('b');
+    expect(frames()).toHaveLength(1);
+  });
+});
+
+describe('worker errors', () => {
+  it('ignores an error from an earlier run', () => {
+    const { recorder, reply } = setup();
+    recorder.start();
+    recorder.start();
+    reply({ type: 'stats', run: 2, stats: encoderStats() });
+    reply({ type: 'error', run: 1, message: 'old failure' });
+    expect(recorder.canSave()).toBe(true);
   });
 });

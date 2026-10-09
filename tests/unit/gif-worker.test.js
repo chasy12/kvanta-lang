@@ -56,11 +56,11 @@ describe('createWorkerHandler', () => {
     expect(post).toHaveBeenLastCalledWith({ type: 'saveFailed', id: 1, message: expect.any(String) });
   });
 
-  it('reports an encoding error and stops encoding', () => {
+  it('reports an encoding error with the run number and stops encoding', () => {
     const { post, handle } = setup();
-    handle({ type: 'start', run: 1, width: W, height: H });
+    handle({ type: 'start', run: 4, width: W, height: H });
     handle({ type: 'frame', t: 0, userWaited: false, buffer: new ArrayBuffer(8) });
-    expect(post).toHaveBeenLastCalledWith({ type: 'error', message: expect.stringContaining('size') });
+    expect(post).toHaveBeenLastCalledWith({ type: 'error', run: 4, message: expect.stringContaining('size') });
     post.mockClear();
     handle(frame(10, [255, 0, 0]));
     expect(post).not.toHaveBeenCalled();

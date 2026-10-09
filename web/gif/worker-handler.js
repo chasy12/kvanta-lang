@@ -7,10 +7,10 @@
  * In:  { type: 'start', run, width, height }
  *      { type: 'frame', t, userWaited, buffer }   RGBA pixels, transferred
  *      { type: 'save', id, t, userWaited }
- * Out: { type: 'stats', run, stats }
+ * Out: { type: 'stats', run, stats }   one per frame, so the page can count frames in flight
  *      { type: 'saved', id, bytes, lengthMs, size, limit }   bytes transferred
  *      { type: 'saveFailed', id, message }
- *      { type: 'error', message }   encoding failed; frames are ignored until the next start
+ *      { type: 'error', run, message }   encoding failed; frames are ignored until the next start
  */
 import { createFrameEncoder } from './frame-encoder.js';
 
@@ -46,7 +46,7 @@ export function createWorkerHandler(post) {
         post({ type: 'stats', run, stats });
       } catch (error) {
         encoder = null;
-        post({ type: 'error', message: error?.message ?? String(error) });
+        post({ type: 'error', run, message: error?.message ?? String(error) });
       }
     } else if (message.type === 'save') {
       save(message);
