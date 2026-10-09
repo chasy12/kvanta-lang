@@ -1,7 +1,6 @@
 /target
 /pkg
 /.git
-/Cargo.lock
 quanta_code_editor/node_modules/
 quanta_code_editor/package-lock.json
 quanta_code_editor/quanta/node_modules/
