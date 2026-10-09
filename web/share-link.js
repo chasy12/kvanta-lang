@@ -8,6 +8,9 @@
 
 const PREFIX = "#code=";
 
+/** Longest program a link may carry, in characters. A tiny link can inflate to gigabytes. */
+export const MAX_SHARED_CHARS = 1_000_000;
+
 /**
  * Run `bytes` through a (de)compression stream and collect the output.
  *
@@ -45,16 +48,40 @@ export async function encodeCode(code) {
 }
 
 /**
+ * Inflate `bytes` and decode them as UTF-8, giving up once the text passes `maxChars`.
+ *
+ * @param {Uint8Array} bytes
+ * @param {number} maxChars
+ * @returns {Promise<string | null>} The text, or null when it is too long.
+ */
+async function inflateText(bytes, maxChars) {
+  const reader = new Response(bytes).body.pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+    if (text.length > maxChars) {
+      await reader.cancel();
+      return null;
+    }
+  }
+  text += decoder.decode();
+  return text.length > maxChars ? null : text;
+}
+
+/**
  * Decode program source from a URL hash made by `encodeCode`.
  *
  * @param {string} hash - Usually `location.hash`.
- * @returns {Promise<string | null>} The source, or null when the hash holds no valid program.
+ * @returns {Promise<string | null>} The source, or null when the hash holds no valid program,
+ *   an empty one, or one longer than `MAX_SHARED_CHARS`.
  */
 export async function decodeCode(hash) {
   if (!hash.startsWith(PREFIX)) return null;
   try {
-    const bytes = await pipe(fromBase64Url(hash.slice(PREFIX.length)), new DecompressionStream("deflate-raw"));
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return (await inflateText(fromBase64Url(hash.slice(PREFIX.length)), MAX_SHARED_CHARS)) || null;
   } catch {
     return null;
   }
