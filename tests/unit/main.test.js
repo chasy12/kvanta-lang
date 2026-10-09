@@ -749,6 +749,86 @@ describe('runBtn – click handler', () => {
 });
 
 // ============================================================
+// Stop and Run recover after a WASM failure
+// ============================================================
+
+describe('runBtn – after a WASM failure', () => {
+  const runBtn = () => document.getElementById('runBtn');
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    mockRuntime.stop.mockReset();
+    if (runBtn().dataset.state === 'stop') runBtn().click();
+  });
+
+  it('returns to Run when the runtime throws while stopping', async () => {
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+    runBtn().click();
+    await vi.waitFor(() => expect(runBtn().dataset.state).toBe('stop'));
+    mockRuntime.stop.mockImplementation(() => { throw new Error('unreachable executed'); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(() => runBtn().click()).not.toThrow();
+
+    expect(runBtn().dataset.state).toBe('run');
+    expect(runBtn().disabled).toBe(false);
+    expect(cancelNow).toHaveBeenCalledWith();
+    expect(mockRecorder.stop).toHaveBeenCalled();
+    // A second click starts a fresh run.
+    mockRuntime.stop.mockReset();
+    runBtn().click();
+    await vi.waitFor(() => expect(mockRuntime.execute).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the error and re-enables Run when compiling rejects', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    Compiler.new.mockReturnValueOnce({
+      compile_code: vi.fn().mockRejectedValue(new Error('RuntimeError: unreachable')),
+      free: vi.fn(),
+    });
+    runBtn().click();
+    await vi.waitFor(async () => expect((await consoleText()).join()).toContain('unreachable'));
+    expect(runBtn().dataset.state).toBe('run');
+    expect(runBtn().disabled).toBe(false);
+  });
+
+  it('frees the compiler when compiling rejects', async () => {
+    const { Compiler } = await import('../../quanta-lang/pkg/quanta_lang.js');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const free = vi.fn();
+    Compiler.new.mockReturnValueOnce({
+      compile_code: vi.fn().mockRejectedValue(new Error('trap')),
+      free,
+    });
+    runBtn().click();
+    await vi.waitFor(() => expect(runBtn().disabled).toBe(false));
+    await vi.waitFor(() => expect(free).toHaveBeenCalled());
+  });
+
+  it('shows the error and goes idle when execute traps and stopping throws too', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockRuntime.stop.mockImplementation(() => { throw new Error('already trapped'); });
+    mockRuntime.execute.mockRejectedValueOnce(new Error('RuntimeError: memory access out of bounds'));
+    runBtn().click();
+    await vi.waitFor(async () => expect((await consoleText()).join()).toContain('memory access out of bounds'));
+    expect(runBtn().dataset.state).toBe('run');
+    expect(runBtn().disabled).toBe(false);
+  });
+
+  it('still starts a run when stopping the previous runtime throws', async () => {
+    runBtn().click();
+    await vi.waitFor(() => expect(runBtn().dataset.state).toBe('run'));
+    await vi.waitFor(() => expect(mockRuntime.execute).toHaveBeenCalledTimes(1));
+    await vi.waitFor(async () => expect((await consoleText()).at(-1)).toMatch(/Finished/));
+    // The finished program's runtime is still held; it traps when told to stop.
+    mockRuntime.stop.mockImplementation(() => { throw new Error('trapped'); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runBtn().click();
+    await vi.waitFor(() => expect(mockRuntime.execute).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ============================================================
 // Language switch
 // ============================================================
 

@@ -474,6 +474,18 @@ function clearErrors() {
 }
 
 /**
+ * Tell the WASM runtime to stop. After a trap (deep recursion, huge array)
+ * `stop()` can throw itself; that must never keep the UI from recovering.
+ */
+function stopRuntime() {
+  try {
+    runtime?.stop();
+  } catch (error) {
+    console.warn('The runtime failed to stop cleanly:', error);
+  }
+}
+
+/**
  * Stop the running program, clear the runtime reference and restore the idle UI.
  *
  * @param {boolean} [announce=true] - Note in the console that the program was stopped.
@@ -482,7 +494,7 @@ function doStop(announce = true) {
   ++currentRun;
   consoleInput.cancel();
   if (announce && isRunning) consolePanel.info('stopped');
-  runtime?.stop();
+  stopRuntime();
   runtime = undefined;
   cancelNow();
   recorder.stop();
@@ -536,7 +548,7 @@ function doRun() {
   let pendingInputs = 0;
   (async () => {
     try {
-      runtime?.stop();
+      stopRuntime();
       consoleInput.cancel();
       runtime = undefined;
       cancelNow(false);
@@ -551,9 +563,13 @@ function doRun() {
       await initWasm();
       const runDocument = editor.state.doc;
       const src = runDocument.toString();
-      let compiler = Compiler.new();
-      const compilation_result = await compiler.compile_code(src);
-      compiler.free?.();
+      const compiler = Compiler.new();
+      let compilation_result;
+      try {
+        compilation_result = await compiler.compile_code(src);
+      } finally {
+        compiler.free?.();
+      }
       if (runId !== currentRun) return;
       if (compilation_result.error_code != 0) {
         const errors = compilationErrors(compilation_result);
@@ -612,7 +628,7 @@ function doRun() {
     } catch (e) {
       if (runId !== currentRun) return;
       consoleInput.cancel();
-      runtime?.stop();
+      stopRuntime();
       console.error(e);
       reportMessage(e?.message ?? String(e));
     } finally {
