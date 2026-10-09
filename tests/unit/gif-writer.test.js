@@ -33,15 +33,28 @@ function picture(bytes, last) {
 /** Expected RGBA pixels of `indices` drawn with `colors`. */
 function rgba(indices, colors) {
   const out = new Uint8Array(indices.length * 4);
-  indices.forEach((index, i) => {
-    out.set([...colors[index], 255], i * 4);
-  });
+  for (let i = 0; i < indices.length; i++) {
+    const color = colors[indices[i]];
+    out[i * 4] = color[0];
+    out[i * 4 + 1] = color[1];
+    out[i * 4 + 2] = color[2];
+    out[i * 4 + 3] = 255;
+  }
   return out;
+}
+
+/** Index of the first differing byte, or -1 when both arrays are equal. */
+function firstMismatch(actual, expected) {
+  if (actual.length !== expected.length) return Math.min(actual.length, expected.length);
+  for (let i = 0; i < actual.length; i++) {
+    if (actual[i] !== expected[i]) return i;
+  }
+  return -1;
 }
 
 function roundTrip(width, height, colors, indices) {
   const bytes = assembleGif(gifHeader(width, height), [gifFrame({ width, height, palette: colors, indices })]);
-  expect(picture(bytes, 0)).toEqual(rgba(indices, colors));
+  expect(firstMismatch(picture(bytes, 0), rgba(indices, colors))).toBe(-1);
 }
 
 describe('gifHeader', () => {
@@ -106,8 +119,8 @@ describe('gifFrame', () => {
 describe('setFrameDelay', () => {
   it('changes the delay of an encoded frame', () => {
     const frame = gifFrame({ width: 2, height: 1, palette: palette(2), indices: Uint8Array.of(0, 1), delayCs: 7 });
-    setFrameDelay(frame, 250);
-    expect(new GifReader(assembleGif(gifHeader(2, 1), [frame])).frameInfo(0).delay).toBe(250);
+    setFrameDelay(frame, 300);
+    expect(new GifReader(assembleGif(gifHeader(2, 1), [frame])).frameInfo(0).delay).toBe(300);
   });
 });
 
