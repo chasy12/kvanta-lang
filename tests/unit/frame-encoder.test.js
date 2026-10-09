@@ -158,6 +158,45 @@ describe('createFrameEncoder', () => {
     expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(6000);
   });
 
+  it.each([[1000 / 30], [33.4]])('ends at exactly one minute with unrounded timestamps %d ms apart', (period) => {
+    const encoder = createFrameEncoder({ width: W, height: H });
+    let stats;
+    for (let i = 0; i < 70 * 30; i++) {
+      stats = encoder.addFrame(withBox(BG, i % W, 0, (i % W) + 1, 1, [i % 256, 0, 0]), i * period, false);
+      if (stats.limit) break;
+    }
+    expect(stats).toMatchObject({ limit: 'time', closedMs: 60_000, openStart: null });
+    const result = encoder.finish(80_000, false);
+    expect(result).toMatchObject({ lengthMs: 60_000, limit: 'time' });
+    const { delays } = decode(result.bytes);
+    expect(delays).toHaveLength(stats.frames);
+    expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(6000);
+    expect(delays.every(delay => delay >= MIN_DELAY_CS)).toBe(true);
+  });
+
+  it('ends at exactly the limit when a save cuts a frame that starts just before it', () => {
+    const encoder = createFrameEncoder({ width: W, height: H, maxPlaybackMs: 1000 });
+    encoder.addFrame(BG, 0, false);
+    encoder.addFrame(BOX, 500, false);
+    encoder.addFrame(TWO_BOXES, 995, false);
+    const first = encoder.finish(5000, false);
+    expect(first).toMatchObject({ lengthMs: 1000, limit: 'time' });
+    const { delays, pictures } = decode(first.bytes);
+    expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(100);
+    expect(delays.every(delay => delay >= MIN_DELAY_CS)).toBe(true);
+    expect(pictures[pictures.length - 1]).toEqual(BOX);
+    const second = encoder.finish(5000, false);
+    expect(second.bytes).toEqual(first.bytes);
+    // Nothing was changed by saving: the frame is still open and the clip can be cut earlier.
+    const earlier = decode(encoder.finish(1000, false).bytes);
+    expect(earlier.delays.reduce((sum, delay) => sum + delay, 0)).toBe(100);
+  });
+
+  it('stops with no frames when the first frame alone is over the size limit', () => {
+    const encoder = createFrameEncoder({ width: W, height: H, maxBytes: 10 });
+    expect(encoder.addFrame(BG, 0, false)).toMatchObject({ frames: 0, limit: 'size' });
+  });
+
   it('reaches the time limit while the picture stays the same', () => {
     const encoder = createFrameEncoder({ width: W, height: H, maxPlaybackMs: 2000 });
     encoder.addFrame(BG, 0, false);
