@@ -110,6 +110,8 @@ export function createFrameEncoder({ width, height, maxBytes = MAX_BYTES, maxPla
   let previous = null;
   /** The frame still on screen: `{ frame, start, userWaited }`; its delay is not final. */
   let open = null;
+  /** The latest frame whose delay is final, and that delay. */
+  let lastClosed = null;
   /** Playback time of the frames whose delay is final. */
   let closedMs = 0;
   /** Sum of the delays written so far, in centiseconds. */
@@ -126,6 +128,20 @@ export function createFrameEncoder({ width, height, maxBytes = MAX_BYTES, maxPla
     return Math.max(MIN_DELAY_CS, Math.round(totalMs / 10) - writtenCs);
   }
 
+  /**
+   * What the open frame becomes when it reaches the time limit. A remainder
+   * below the minimum delay cannot be a frame of its own without overshooting
+   * the limit, so the frame is dropped and the remainder goes to the frame before.
+   *
+   * @returns {{ drop: boolean, delay: number }} `delay` is the open frame's delay,
+   *   or, when dropped, the previous frame's new delay.
+   */
+  function cutAtLimit() {
+    const remaining = Math.round(maxPlaybackMs / 10) - writtenCs;
+    if (remaining >= MIN_DELAY_CS || !lastClosed) return { drop: false, delay: Math.max(MIN_DELAY_CS, remaining) };
+    return { drop: true, delay: Math.max(MIN_DELAY_CS, lastClosed.delay + remaining) };
+  }
+
   /** Fix the open frame's delay at time `t`; returns `'time'` if that fills the clip. */
   function closeOpen(t, userWaited) {
     let duration = openDuration(t, userWaited);
@@ -135,9 +151,27 @@ export function createFrameEncoder({ width, height, maxBytes = MAX_BYTES, maxPla
       reached = 'time';
     }
     closedMs += duration;
+    if (reached) {
+      const cut = cutAtLimit();
+      if (cut.drop) {
+        frames.pop();
+        bytes -= open.frame.length;
+        writtenCs += cut.delay - lastClosed.delay;
+        lastClosed.delay = cut.delay;
+        setFrameDelay(lastClosed.frame, cut.delay);
+        open = null;
+        return reached;
+      }
+      writtenCs += cut.delay;
+      setFrameDelay(open.frame, cut.delay);
+      lastClosed = { frame: open.frame, delay: cut.delay };
+      open = null;
+      return reached;
+    }
     const delay = delayFor(closedMs);
     writtenCs += delay;
     setFrameDelay(open.frame, delay);
+    lastClosed = { frame: open.frame, delay };
     open = null;
     return reached;
   }
@@ -200,16 +234,27 @@ export function createFrameEncoder({ width, height, maxBytes = MAX_BYTES, maxPla
     finish(t, userWaited) {
       let lengthMs = closedMs;
       let reached = limit;
+      let list = frames;
       if (open) {
         let duration = openDuration(t, userWaited);
         if (closedMs + duration >= maxPlaybackMs) {
           duration = maxPlaybackMs - closedMs;
           reached = reached ?? 'time';
+          const cut = cutAtLimit();
+          if (cut.drop) {
+            // Work on copies: recording may continue after this save.
+            const patched = lastClosed.frame.slice();
+            setFrameDelay(patched, cut.delay);
+            list = [...frames.slice(0, -2), patched];
+          } else {
+            setFrameDelay(open.frame, cut.delay);
+          }
+        } else {
+          setFrameDelay(open.frame, delayFor(lengthMs + duration));
         }
         lengthMs += duration;
-        setFrameDelay(open.frame, delayFor(lengthMs));
       }
-      const gif = assembleGif(header, frames);
+      const gif = assembleGif(header, list);
       return { bytes: gif, lengthMs, size: gif.length, limit: reached };
     },
   };
