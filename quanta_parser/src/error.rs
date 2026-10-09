@@ -65,7 +65,7 @@ impl Error {
             pest::error::LineColLocation::Span((l1, c1), (l2, c2)) => (l1, c1, l2, c2),
         };
         if message.starts_with("expected operator") || message.starts_with("expected box") {
-            if c2 >= err.line().len() && !err.line().trim().ends_with(";") {
+            if c2 >= err.line().chars().count() && !err.line().trim().ends_with(";") {
                 return Error::parse(format!("Probably missing ';'"), (l1, c1, l2, c2));
             }
             if c2 == 1 {

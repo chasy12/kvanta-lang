@@ -15,6 +15,19 @@ macro_rules! coords {
     };
 }
 
+/// Largest total element count of one array, counting every nested dimension.
+/// Each element takes over a hundred bytes, so larger arrays can't be built.
+pub const MAX_ARRAY_ELEMENTS: usize = 1_000_000;
+const ARRAY_TOO_LARGE: &str = "Array is too large: at most 1000000 elements";
+
+/// Number of scalar elements in a value of this type (1 for a scalar).
+fn element_count(typ: &Type) -> usize {
+    match &typ.type_name {
+        TypeName::Array(inner, size) => inner.as_ref().as_ref().map_or(1, element_count).saturating_mul(*size),
+        _ => 1,
+    }
+}
+
 pub struct AstBuilder {
     pub function_signatures : HashMap<String, (Vec<Type>, Option<Type>)>,
     pub diagnostics: RefCell<Vec<Error>>,
@@ -345,7 +358,11 @@ fn build_ast_from_simple_expression_inner(&self, expression: Pair<Rule>) -> Resu
                 Err(Error::parse(format!("Unknown unary operator '{}'", operator.as_str()), coords))
             }
         },
-        Rule::dyadicExpr => {
+        Rule::expression if expression.clone().into_inner().count() == 1 => {
+            return self.build_ast_from_simple_expression_inner(expression.into_inner().into_iter().next().unwrap())
+        },
+        Rule::expression => {
+            // operand, operator, expression
             let coords = coords!(expression);
             let mut iter = expression.into_inner().into_iter();
             let left = self.build_ast_from_simple_expression_inner(iter.next().unwrap())?;
@@ -372,11 +389,8 @@ fn build_ast_from_simple_expression_inner(&self, expression: Pair<Rule>) -> Resu
             }?;
             Ok(SimpleExpression { expr: v, coords: coords })
         },
-        Rule::expression => {
-            return self.build_ast_from_simple_expression_inner(expression.into_inner().into_iter().next().unwrap())
-        },
         Rule::parenth_expr => {
-            let inner_expr = self.build_ast_from_simple_expression_inner(expression.into_inner().into_iter().next().unwrap().into_inner().into_iter().next().unwrap())?;
+            let inner_expr = self.build_ast_from_simple_expression_inner(expression.into_inner().into_iter().next().unwrap())?;
             Ok(SimpleExpression{expr: SimpleExpressionType::Unary(super::UnaryOperator::Parentheses, inner_expr.into()), coords:coords})
         },
         _ => {
@@ -397,7 +411,7 @@ fn build_ast_from_term(&self, term : Pair<Rule>) -> Result<Expression, Error> {
     let coords = coords!(term);
     match term.as_rule() {
         Rule::parenth_expr => {
-            let inner_expr = self.build_ast_from_expression_inner(term.into_inner().into_iter().next().unwrap().into_inner().into_iter().next().unwrap())?;
+            let inner_expr = self.build_ast_from_expression_inner(term.into_inner().into_iter().next().unwrap())?;
             Ok(Expression{expr_type: ExpressionType::Unary(super::UnaryOperator::Parentheses, inner_expr.into()), coords: coords})
         },
         _ => {
@@ -429,7 +443,11 @@ fn build_ast_from_expression_inner(&self, expression: Pair<Rule>) -> Result<Expr
                 Err(Error::parse(format!("Unknown unary operator {}", operator.as_str()), coords))
             }
         },
-        Rule::dyadicExpr => {
+        Rule::expression if expression.clone().into_inner().count() == 1 => {
+            return self.build_ast_from_expression_inner(expression.into_inner().into_iter().next().unwrap())
+        },
+        Rule::expression => {
+            // operand, operator, expression
             let coords = coords!(expression);
             let mut iter = expression.into_inner().into_iter();
             let left = self.build_ast_from_expression_inner(iter.next().unwrap())?;
@@ -456,11 +474,8 @@ fn build_ast_from_expression_inner(&self, expression: Pair<Rule>) -> Result<Expr
             }?;
             Ok(Expression{expr_type: expr, coords: coords})
         },
-        Rule::expression => {
-            return self.build_ast_from_expression_inner(expression.into_inner().into_iter().next().unwrap())
-        },
         Rule::parenth_expr => {
-            let inner_expr = self.build_ast_from_expression_inner(expression.into_inner().into_iter().next().unwrap().into_inner().into_iter().next().unwrap())?;
+            let inner_expr = self.build_ast_from_expression_inner(expression.into_inner().into_iter().next().unwrap())?;
             Ok(Expression{expr_type: ExpressionType::Unary(super::UnaryOperator::Parentheses, inner_expr.into()), coords: coords})
         },
         _ => {
@@ -499,10 +514,15 @@ fn build_ast_from_init(&self, command: Pairs<Rule>, coords: Coords) -> Result<As
 
 fn build_sized_type<'a>(&self, typ: Type, dimensions: impl Iterator<Item = Pair<'a, Rule>>) -> Result<Type, Error> {
     let mut sizes = vec![];
+    let mut elements = element_count(&typ);
     for dimension in dimensions {
         let literal = dimension.into_inner().next().unwrap();
         let size = literal.as_str().parse::<usize>().ok().filter(|size| *size > 0)
             .ok_or_else(|| Error::parse("Array size must be a positive integer literal".into(), coords!(literal)))?;
+        elements = elements.saturating_mul(size);
+        if elements > MAX_ARRAY_ELEMENTS {
+            return Err(Error::parse(ARRAY_TOO_LARGE.into(), coords!(literal)));
+        }
         sizes.push(size);
     }
     let is_const = typ.is_const;
@@ -632,16 +652,18 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
         },
         Rule::noun   => Ok(BaseValueType::Id(self.build_ast_from_noun(val)?)),
         Rule::array_literal => {
+            let items = val.into_inner();
             let mut elements = vec![];
-            for item in val.into_inner() {
+            for item in items {
+                if item.as_rule() == Rule::expand_mark {
+                    // `{value...}`: the one element repeats to the declared size.
+                    let value = elements.pop().expect("`...` always follows an element");
+                    return Ok(BaseValue { val: BaseValueType::ExpandingArray(Arc::new(value)), coords });
+                }
                 elements.push(self.build_ast_from_value(item)?);
             }
             Ok(BaseValueType::Array(elements))
         },
-        Rule::expanded_array_literal => {
-            let value = self.build_ast_from_value(val.into_inner().into_iter().next().unwrap())?;
-            Ok(BaseValueType::ExpandingArray(Arc::new(value)))
-        }
         Rule::function_call => {
             let mut iter = val.into_inner().into_iter();
             let name = self.build_ast_from_ident(iter.next().unwrap())?;
@@ -768,6 +790,9 @@ fn build_ast_from_array_type(&self, type_val: Pairs<Rule>) -> Result<TypeName, E
     if let BaseValue{val: BaseValueType::Int(array_size), coords: c} = self.build_ast_from_value(val)? {
         if array_size <= 0 {
             return Err(Error::parse(String::from("Array size must be greater than 0"), c));
+        }
+        if element_count(&inner_type).saturating_mul(array_size as usize) > MAX_ARRAY_ELEMENTS {
+            return Err(Error::parse(ARRAY_TOO_LARGE.into(), c));
         }
         return Ok(TypeName::Array(Box::new(Some(inner_type)), array_size as usize));
     } else {

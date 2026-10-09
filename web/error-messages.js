@@ -31,6 +31,8 @@ export const ERROR_MESSAGES_UK = {
   "Unknown string escape: \\{}": "Невідома escape-послідовність у рядку: \\{0}",
   "Incomplete string escape": "Незавершена escape-послідовність у рядку",
   "Array size must be a positive integer literal": "Розмір масиву має бути додатним цілим числом, записаним безпосередньо в коді",
+  "Array is too large: at most 1000000 elements": "Масив завеликий: у ньому може бути щонайбільше 1000000 елементів",
+  "Code is nested too deeply (more than 64 levels)": "Забагато вкладених дужок і блоків (більше 64 рівнів)",
   "Cannot determine array element default": "Неможливо визначити початкове значення елемента масиву",
   "'{}' is a keyword, it cannot be a loop variable": "'{0}' є ключовим словом, його не можна використати як змінну циклу",
   "{} can only be used inside a loop": "{0} можна використовувати лише всередині циклу",

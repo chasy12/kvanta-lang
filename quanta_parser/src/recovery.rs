@@ -207,6 +207,8 @@ pub fn parse_ast_recovering(source: &str) -> (Option<AstProgram>, Vec<Error>) {
 /// Like `parse_ast_recovering`, also returning the names declared by the
 /// quarantined code, so uses of them are not reported as undefined.
 pub fn parse_ast_recovering_with_quarantine(source: &str) -> (Option<AstProgram>, Vec<Error>, HashSet<String>) {
+    // Too-deep nesting can't be recovered from region by region: report it once.
+    if let Err(error) = crate::check_nesting(source) { return (None, vec![error], HashSet::new()); }
     let mut chars: Vec<char> = source.chars().collect();
     let mut candidates = regions(source);
     let mut errors = vec![];
