@@ -15,7 +15,7 @@ fn_header = { kw_func ~ ident ~ "(" ~ fn_arg_list ~ ")" ~ ("->" ~ type_name)? }
 function      =  { fn_header ~ "{" ~ block ~ "}" }
 
 statement      =  { (command | init_statement | if_statement | for_statement | while_statement | return_statement | break_statement | continue_statement) }
-command        =  { function_call ~ ";" }
+command        =  { !kw_return ~ function_call ~ ";" }  // `return (x);` is a return, not a call of "return"
 function_call  =  { ident ~ "(" ~ params? ~ ")" }
 params         = _{ argument ~ ("," ~ argument)* }
 argument       = _{ named_argument | expression }
@@ -72,9 +72,10 @@ operator = {
 string_literal = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 // `{1, 2, 3}` and `{0...}` share one rule, so that the first element is parsed
 // once. Separate rules for the two forms parse it twice, and nested `{{0...}...}`
-// then takes exponential time. The builder tells them apart by `expand_mark`.
-array_literal = { "{" ~ (term ~ (expand_mark | ("," ~ term)*))?  ~ "}" }
-expand_mark = { "..." }
+// then takes exponential time. The builder tells them apart by the `...` token,
+// which keeps the old rule name so that syntax errors still mention it.
+array_literal = { "{" ~ (term ~ (expanded_array_literal | ("," ~ term)*))?  ~ "}" }
+expanded_array_literal = { "..." }
 boolean = @{ ("true" | "false") ~ !ident_char }
 color = @{"Color::" ~ ident}
 key   = @{"Key::" ~ ident}

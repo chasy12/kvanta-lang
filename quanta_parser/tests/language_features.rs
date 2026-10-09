@@ -299,3 +299,14 @@ fn expression_ast_keeps_precedence_and_associativity() {
     assert_eq!(shape("-a * 2"), "(UnaryMinus(a) Mult 2)");
     assert_eq!(shape("1 + 2 + 3 * 4 - 5"), "(((1 Plus 2) Plus (3 Mult 4)) Minus 5)");
 }
+
+#[test]
+fn return_accepts_a_parenthesized_value() {
+    for source in ["func f(int a) -> int { return (a + 1); } func main() {}", "func f(int a) -> int { return(a); } func main() {}"] {
+        let AstProgram::Forest((functions, _)) = parse_ast(source).unwrap() else { panic!("Expected functions") };
+        assert!(matches!(functions[0].block.nodes[0].statement, AstStatement::Return { .. }), "{source}");
+    }
+    // A function that merely starts with the word is still a call.
+    let ast = block("returnTotal(1);");
+    assert!(matches!(&ast.nodes[0].statement, AstStatement::Command { name, .. } if name == "returnTotal"));
+}

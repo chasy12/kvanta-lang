@@ -655,7 +655,7 @@ fn build_ast_from_value(&self, val: Pair<Rule>) -> Result<BaseValue, Error> {
             let items = val.into_inner();
             let mut elements = vec![];
             for item in items {
-                if item.as_rule() == Rule::expand_mark {
+                if item.as_rule() == Rule::expanded_array_literal {
                     // `{value...}`: the one element repeats to the declared size.
                     let value = elements.pop().expect("`...` always follows an element");
                     return Ok(BaseValue { val: BaseValueType::ExpandingArray(Arc::new(value)), coords });
