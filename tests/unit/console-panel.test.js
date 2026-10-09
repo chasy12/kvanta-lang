@@ -2,7 +2,7 @@
  * Tests for web/console-panel.js.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createConsole, formatElapsed, formatDuration } from '../../web/console-panel.js';
+import { createConsole, formatElapsed, formatDuration, MAX_LINE_CHARS } from '../../web/console-panel.js';
 import { setLanguage } from '../../web/i18n.js';
 
 let el;
@@ -190,5 +190,64 @@ describe('console activity', () => {
     panel.error({ error_code: 4, start_row: 1, get_error_message: () => 'Division by 0' });
     panel.message('Internal failure');
     expect(activity).toEqual(['print', 'print', 'error', 'error']);
+  });
+});
+
+describe('very long lines', () => {
+  const text = (li) => li.querySelector('.console__text').textContent;
+
+  it('cuts a long printed line at the limit and says how much was left out', () => {
+    panel.print('x'.repeat(MAX_LINE_CHARS + 2345));
+    const [line] = lines();
+    expect(text(line)).toBe('x'.repeat(MAX_LINE_CHARS) + '… (+2345 characters)');
+  });
+
+  it('keeps only the cut text in memory', () => {
+    panel.print('y'.repeat(1_300_000));
+    expect(panel.entries[0].text.length).toBe(MAX_LINE_CHARS);
+  });
+
+  it('leaves a line of exactly the limit alone', () => {
+    panel.print('x'.repeat(MAX_LINE_CHARS));
+    expect(text(lines()[0])).toBe('x'.repeat(MAX_LINE_CHARS));
+  });
+
+  it('still merges identical long lines into one with a count', () => {
+    const long = 'z'.repeat(50_000);
+    panel.print(long);
+    panel.print(long);
+    panel.print(long);
+    const all = lines();
+    expect(all).toHaveLength(1);
+    expect(all[0].querySelector('.console__count').textContent).toBe('×3');
+  });
+
+  it('does not merge a cut line with a shorter one that shares its start', () => {
+    panel.print('x'.repeat(MAX_LINE_CHARS + 5));
+    panel.print('x'.repeat(MAX_LINE_CHARS));
+    expect(lines()).toHaveLength(2);
+  });
+
+  it('does not split a character made of two UTF-16 units', () => {
+    panel.print('a'.repeat(MAX_LINE_CHARS - 1) + '😀' + 'b'.repeat(10));
+    const shown = text(lines()[0]);
+    expect(shown.startsWith('a'.repeat(MAX_LINE_CHARS - 1) + '…')).toBe(true);
+    expect(shown).not.toMatch(/[\ud800-\udbff]…/);
+  });
+
+  it('words the note in the current language', () => {
+    panel.print('x'.repeat(MAX_LINE_CHARS + 7));
+    lines();
+    setLanguage('uk');
+    panel.render();
+    expect(text([...el.children][0]).endsWith('… (ще 7 символів)')).toBe(true);
+  });
+
+  it('draws a thousand long lines quickly', () => {
+    const big = 'q'.repeat(1_300_000);
+    const started = performance.now();
+    for (let i = 0; i < 1000; i++) panel.print(big + i);
+    lines();
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });
