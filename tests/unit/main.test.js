@@ -1043,6 +1043,8 @@ describe('GIF recording', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRecorder.canSave.mockReturnValue(false);
+    // Known enabled state: a disabled button would ignore the clicks below.
+    mockRecorder.options.onStats({ frames: 2, lengthMs: 0, bytes: 0, limit: null });
     document.getElementById('consoleClear').click();
   });
   afterEach(() => vi.restoreAllMocks());
@@ -1099,9 +1101,6 @@ describe('GIF recording', () => {
     mockRecorder.save.mockReturnValue(new Promise(resolve => { finishSave = resolve; }));
     vi.spyOn(window, 'prompt').mockReturnValue('bounce');
     const anchor = captureDownload();
-    // The previous test left the button disabled; a disabled button ignores clicks.
-    mockRecorder.options.onStats({ frames: 2, lengthMs: 1000, bytes: 1000, limit: null });
-    expect(saveGifBtn().disabled).toBe(false);
 
     saveGifBtn().click();
     expect(saveGifBtn().disabled).toBe(true);
@@ -1133,7 +1132,17 @@ describe('GIF recording', () => {
     mockRecorder.canSave.mockReturnValue(true);
     vi.spyOn(window, 'prompt').mockReturnValue(null);
     saveGifBtn().click();
+    expect(window.prompt).toHaveBeenCalled();
     expect(mockRecorder.save).not.toHaveBeenCalled();
+  });
+
+  it('does not double a .gif extension typed in any case', async () => {
+    mockRecorder.canSave.mockReturnValue(true);
+    mockRecorder.save.mockResolvedValue({ bytes: new Uint8Array([1]), lengthMs: 1000, size: MB, limit: null });
+    vi.spyOn(window, 'prompt').mockReturnValue('Clip.GIF');
+    const anchor = captureDownload();
+    saveGifBtn().click();
+    await vi.waitFor(() => expect(anchor()?.download).toBe('Clip.GIF'));
   });
 
   it('reports a failed save in the console', async () => {
