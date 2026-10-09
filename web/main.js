@@ -13,7 +13,7 @@
  *   - Show print() output, run status and errors in the console under the canvas.
  *   - Switch the interface between English and Ukrainian.
  *   - Share programs as links (`#code=...`) and load them on open.
- *   - Handle file load / save and canvas image export.
+ *   - Handle file load / save, canvas image export and GIF export of runs.
  */
 
 // CodeMirror bits (via esm.sh, no local install needed)
@@ -50,8 +50,10 @@ import { quanta, quantaSyntax, quantaLanguageSupport } from "./quanta-support.ts
 import { quantaTheme } from "./custom-theme";
 
 // Canvas runtime (drawCommands + utilities)
-import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler } from "./canvas-runtime.js";
+import { drawCommands, isAnimationMode, setup, checkIsCancelled, cancelNow, setIsSafari, setPrintHandler, setPresentHandler } from "./canvas-runtime.js";
 import { createFpsCounter } from "./fps-counter.js";
+import { createRecorder } from "./gif/recorder.js";
+import { createGifMeter, formatClipLength, formatMegabytes } from "./gif/gif-meter.js";
 import { encodeCode, decodeCode, isSharedHash } from "./share-link.js";
 import { EXAMPLE_PROGRAM } from "./example-program.js";
 import { programKey } from "./program-key.js";
@@ -69,6 +71,20 @@ const canvas = document.getElementById("canvas");
 const shareBtn = document.getElementById("shareBtn");
 /** Frame rate readout, shown only while an animation is running. */
 const fpsCounter = createFpsCounter(document.getElementById("fpsCounter"), { format: (fps) => t("fps", fps) });
+const saveGifBtn = document.getElementById("saveGifBtn");
+/** Length and size of the GIF that Save GIF would produce right now. */
+const gifMeter = createGifMeter(document.getElementById("gifMeter"));
+/** True while a GIF is being assembled; the button stays disabled meanwhile. */
+let savingGif = false;
+/** Records every run so its start can be saved as a GIF. */
+const recorder = createRecorder({
+  onStats: (stats) => {
+    gifMeter.update(stats);
+    if (!savingGif) saveGifBtn.disabled = stats.frames < 2;
+  },
+});
+setPresentHandler((visibleCanvas) => recorder.present(visibleCanvas));
+saveGifBtn.disabled = true;
 const consoleLayout = createConsoleLayout({
   container: document.getElementById('resultWrap'),
   panel: document.getElementById('consolePanel'),
@@ -469,6 +485,7 @@ function doStop(announce = true) {
   runtime?.stop();
   runtime = undefined;
   cancelNow();
+  recorder.stop();
   fpsCounter.reset();
   setIdleUI();
 }
@@ -524,6 +541,7 @@ function doRun() {
       runtime = undefined;
       cancelNow(false);
       fpsCounter.reset();
+      recorder.start();
       isRunning = true;
       runBtn.disabled = true;
       consolePanel.clear();
@@ -554,10 +572,13 @@ function doRun() {
       activeRuntime.set_input_handler(kind => {
         if (runId !== currentRun) return Promise.resolve(null);
         pendingInputs++;
+        recorder.setWaitingForUser(true);
         setRunningUI();
         return consoleInput.request(kind).finally(() => {
           pendingInputs--;
-          if (runId === currentRun && !mainExecuting && !pendingInputs) setIdleUI();
+          if (runId !== currentRun) return;
+          recorder.setWaitingForUser(!mainExecuting || pendingInputs > 0);
+          if (!mainExecuting && !pendingInputs) setIdleUI();
         });
       });
       // An error in a keyboard or mouse handler ends the program.
@@ -597,6 +618,8 @@ function doRun() {
     } finally {
       mainExecuting = false;
       if (runId === currentRun) {
+        // Only key and mouse handlers can draw now, so every pause waits for the user.
+        recorder.setWaitingForUser(true);
         fpsCounter.reset();
         if (!pendingInputs) setIdleUI();
         runBtn.disabled = false;
@@ -692,6 +715,7 @@ onLanguageChange(() => {
   showLanguage();
   consoleLayout.refresh();
   consolePanel.render();
+  gifMeter.refresh();
   consoleInput.refresh();
   editor.dispatch({ effects: languageCompartment.reconfigure(editorPhrases()) });
   if (shownErrors.length) showErrors(editor, shownErrors);
@@ -797,6 +821,24 @@ export function downloadFile(filename, text) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Trigger a browser download of `blob` named `filename`.
+ *
+ * The object URL is revoked a little later, so a large file is not cut off
+ * while the browser starts the download.
+ *
+ * @param {string} filename
+ * @param {Blob} blob
+ */
+export function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** Download the current editor source as a `.quanta` file. */
 document.getElementById("downloadBtn").addEventListener("click", () => {
   const code = editor.state.doc.toString();
@@ -834,6 +876,30 @@ document.getElementById("saveBtn").addEventListener("click", () => {
   link.href = image;
   link.download = filename + ".jpg";
   link.click();
+});
+
+/** Save the start of the run as an animated GIF. */
+saveGifBtn.addEventListener("click", async () => {
+  if (!recorder.canSave()) return;
+  // The clip ends now, not when the name prompt closes.
+  const clickedAt = performance.now();
+  let filename = prompt(t('promptAnimation'), t('defaultAnimation'));
+  if (!filename) return; // user pressed Cancel
+  if (!filename.toLowerCase().endsWith(".gif")) filename += ".gif";
+
+  savingGif = true;
+  saveGifBtn.disabled = true;
+  try {
+    const { bytes, lengthMs, size, limit } = await recorder.save(clickedAt);
+    downloadBlob(filename, new Blob([bytes], { type: "image/gif" }));
+    const key = limit === 'time' ? 'gifSavedTimeLimit' : limit === 'size' ? 'gifSavedSizeLimit' : 'gifSaved';
+    consolePanel.info(key, () => formatClipLength(lengthMs), () => formatMegabytes(size));
+  } catch (e) {
+    reportMessage(t('gifSaveFailed', e?.message ?? String(e)));
+  } finally {
+    savingGif = false;
+    saveGifBtn.disabled = !recorder.canSave();
+  }
 });
 
 /** Read the selected file and replace the editor's content with its text. */

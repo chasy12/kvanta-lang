@@ -39,6 +39,15 @@ const saveBtn = document.createElement('button');
 saveBtn.id = 'saveBtn';
 document.body.appendChild(saveBtn);
 
+const saveGifBtn = document.createElement('button');
+saveGifBtn.id = 'saveGifBtn';
+document.body.appendChild(saveGifBtn);
+
+const gifMeter = document.createElement('span');
+gifMeter.id = 'gifMeter';
+gifMeter.hidden = true;
+document.body.appendChild(gifMeter);
+
 const shareBtn = document.createElement('button');
 shareBtn.id = 'shareBtn';
 document.body.appendChild(shareBtn);
