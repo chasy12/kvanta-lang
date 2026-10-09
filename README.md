@@ -7,7 +7,7 @@ The canvas is 1000×1000 virtual pixels and scales responsively to the window si
 ## Quick Start
 
 ```
-# Draw a red circle
+// Draw a red circle
 setFigureColor(Color::Red);
 circle(500, 500, 200);
 ```
@@ -100,15 +100,15 @@ display or convert it, for example `int values[3] = {0...}; text(100, 100, value
 ### Drawing Commands
 
 ```
-circle(x, y, r)                    -- circle of radius r centered at (x, y)
-rectangle(x1, y1, x2, y2)          -- rectangle from (x1, y1) to (x2, y2)
-line(x1, y1, x2, y2)               -- line between two points
-arc(x, y, r, a1, a2)               -- arc from angle a1 to a2 (degrees, CCW from X axis)
-polygon(x1, y1, x2, y2, x3, y3, ..)-- polygon from N >= 3 points
+circle(x, y, r)                    // circle of radius r centered at (x, y)
+rectangle(x1, y1, x2, y2)          // rectangle from (x1, y1) to (x2, y2)
+line(x1, y1, x2, y2)               // line between two points
+arc(x, y, r, a1, a2)               // arc from angle a1 to a2 (degrees, CCW from X axis)
+polygon(x1, y1, x2, y2, x3, y3, ..) // polygon from N >= 3 points
 
-setFigureColor(Color::Red)          -- fill color (default: white)
-setLineColor(Color::Blue)           -- stroke color (default: black)
-setLineWidth(3)                     -- line width in pixels (default: 1)
+setFigureColor(Color::Red)          // fill color (default: white)
+setLineColor(Color::Blue)           // stroke color (default: black)
+setLineWidth(3)                     // line width in pixels (default: 1)
 ```
 
 ### Text
@@ -172,8 +172,10 @@ text(100, 100, {1, 2, 3});    // Canvas: {1, 2, 3}
 ### Console Output
 
 ```
-print("Hello!");                    -- prints a line in the console
-print("x =", x, "y =", y);          -- any number of values of any type, joined by spaces
+int x = 3;
+int y = 4;
+print("Hello!");                    // prints a line in the console
+print("x =", x, "y =", y);          // any number of values of any type, joined by spaces
 ```
 
 Click the console header to close or reopen it. While closed, a dot marks new output;
@@ -255,21 +257,21 @@ never execute code, evaluate globals or request input.
 ```
 Color::Red, Color::Green, Color::Blue, Color::Yellow,
 Color::Pink, Color::White, Color::Black, ...
-Color::Random                       -- random color
-rgb(r, g, b)                        -- custom color from components
-Color::Transparent                  -- no fill / transparent
+Color::Random                       // random color
+rgb(r, g, b)                        // custom color from components
+Color::Transparent                  // no fill / transparent
 ```
 
 ### Math Functions
 
 ```
-abs(x)            -- absolute value (int -> int, float -> float)
-round(x)          -- round to nearest int
-ceil(x)           -- round up
-floor(x)          -- round down
-sqrt(x)           -- square root
-decimal(x)        -- cast int to float  (5 / 2 == 2, decimal(5) / 2 == 2.5)
-random(a, b)      -- random int in [a, b]
+abs(x)            // absolute value (int -> int, float -> float)
+round(x)          // round to nearest int
+ceil(x)           // round up
+floor(x)          // round down
+sqrt(x)           // square root
+decimal(x)        // cast int to float  (5 / 2 == 2, decimal(5) / 2 == 2.5)
+random(a, b)      // random int in [a, b]
 ```
 
 `abs()` takes one numeric argument. For the minimum integer, `-2147483648`,
@@ -286,8 +288,8 @@ if (condition) {
     ...
 }
 
-for i in (0..10) { ... }    -- inclusive range; decrements if from > to
-for value in values { ... } -- visits each element of an array
+for i in (0..10) { ... }    // inclusive range; decrements if from > to
+for value in values { ... } // visits each element of an array
 while (condition) { ... }
 ```
 
@@ -345,11 +347,11 @@ Global blocks are accessible from all functions.
 ### Animation
 
 ```
-animate()       -- enter animation mode (nothing renders until frame() is called)
-frame()         -- show the current canvas, then wait for the next frame
-setFps(n)       -- set the frame rate frame() keeps (default: 30)
-setFps(0)       -- no cap: one frame per screen refresh (e.g. 60, 120 or 144 fps)
-sleep(ms)       -- pause execution for ms milliseconds
+animate()       // enter animation mode (nothing renders until frame() is called)
+frame()         // show the current canvas, then wait for the next frame
+setFps(n)       // set the frame rate frame() keeps (default: 30)
+setFps(0)       // no cap: one frame per screen refresh (e.g. 60, 120 or 144 fps)
+sleep(ms)       // pause execution for ms milliseconds
 ```
 
 `frame()` keeps a steady pace: the time your code spends drawing a frame counts
@@ -363,13 +365,13 @@ Declare these functions to handle input events:
 
 ```
 func mouse(int x, int y) {
-    -- called on canvas click at position (x, y)
+    // called on canvas click at position (x, y)
 }
 
 func keyboard(int key) {
-    -- called on keypress when canvas is focused
+    // called on keypress when canvas is focused
     if (key == Key::Space) { ... }
-    if (key == Key::A) { ... }    -- 'A' key, etc.
+    if (key == Key::A) { ... }    // 'A' key, etc.
 }
 ```
 
