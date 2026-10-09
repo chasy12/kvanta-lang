@@ -16,7 +16,7 @@ function accessibleName(button) {
   return (button.getAttribute('aria-label') ?? button.textContent).trim();
 }
 
-const ICON_BUTTONS = ['loadBtn', 'downloadBtn', 'shareBtn', 'runBtn', 'saveBtn', 'consoleClear'];
+const ICON_BUTTONS = ['loadBtn', 'downloadBtn', 'shareBtn', 'runBtn', 'saveBtn', 'saveGifBtn', 'consoleClear'];
 
 describe('index.html icon buttons', () => {
   afterEach(() => setLanguage('en'));

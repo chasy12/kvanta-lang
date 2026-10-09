@@ -30,6 +30,24 @@ const mockRuntime = vi.hoisted(() => ({
   get_runtime_error: vi.fn(() => ({ error_code: 0 })),
 }));
 
+const mockRecorder = vi.hoisted(() => ({
+  start: vi.fn(),
+  stop: vi.fn(),
+  present: vi.fn(),
+  setWaitingForUser: vi.fn(),
+  canSave: vi.fn(() => false),
+  save: vi.fn(),
+  stats: vi.fn(),
+  options: null,
+}));
+
+vi.mock('../../web/gif/recorder.js', () => ({
+  createRecorder: vi.fn((options) => {
+    mockRecorder.options = options;
+    return mockRecorder;
+  }),
+}));
+
 vi.mock('../../quanta-lang/pkg/quanta_lang.js', () => {
   return {
     default: vi.fn().mockResolvedValue(undefined), // initWasm
@@ -54,6 +72,7 @@ vi.mock('../../web/canvas-runtime.js', () => ({
   cancelNow: vi.fn(),
   setIsSafari: vi.fn(),
   setPrintHandler: vi.fn(),
+  setPresentHandler: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -74,11 +93,14 @@ import {
   showOk,
 } from '../../web/main.js';
 
-import { setup, cancelNow, drawCommands, isAnimationMode, setPrintHandler } from '../../web/canvas-runtime.js';
+import { setup, cancelNow, drawCommands, isAnimationMode, setPrintHandler, setPresentHandler } from '../../web/canvas-runtime.js';
 import { setLanguage } from '../../web/i18n.js';
 
 /** The print() handler main.js registered on load (captured before mocks are cleared). */
 const printHandler = setPrintHandler.mock.calls[0]?.[0];
+
+/** The present handler main.js registered on load. */
+const presentHandler = setPresentHandler.mock.calls[0]?.[0];
 
 /** Text of each console line, once pending lines are drawn. */
 beforeEach(() => setLanguage('en'));
@@ -989,5 +1011,136 @@ describe('runtime input UI', () => {
     await expect(later).resolves.toBeNull();
     await expect(handler('int')).resolves.toBeNull();
     expect(document.getElementById('consoleInput').hidden).toBe(true);
+  });
+});
+
+describe('GIF recording', () => {
+  const runBtn = () => document.getElementById('runBtn');
+  const saveGifBtn = () => document.getElementById('saveGifBtn');
+  const gifMeter = () => document.getElementById('gifMeter');
+  const MB = 1024 * 1024;
+
+  function submit(value) {
+    const host = document.getElementById('consoleInput');
+    host.querySelector('input').value = value;
+    host.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  }
+
+  /** Make the next anchor click a no-op and return a getter for that anchor. */
+  function captureDownload() {
+    let anchor = null;
+    URL.createObjectURL = vi.fn(() => 'blob:gif');
+    URL.revokeObjectURL = vi.fn();
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag) => {
+      const el = create(tag);
+      if (tag === 'a') { anchor = el; el.click = vi.fn(); }
+      return el;
+    });
+    return () => anchor;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRecorder.canSave.mockReturnValue(false);
+    document.getElementById('consoleClear').click();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('forwards each shown picture to the recorder', () => {
+    const visible = document.getElementById('canvas');
+    presentHandler(visible);
+    expect(mockRecorder.present).toHaveBeenCalledWith(visible);
+  });
+
+  it('starts a new recording on Run and stops capturing on Stop', async () => {
+    mockRuntime.execute.mockReturnValueOnce(new Promise(() => {}));
+    runBtn().click();
+    await vi.waitFor(() => expect(runBtn().dataset.state).toBe('stop'));
+    expect(mockRecorder.start).toHaveBeenCalledTimes(1);
+    expect(mockRecorder.stop).not.toHaveBeenCalled();
+    runBtn().click();
+    expect(mockRecorder.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the recorder when the program waits for the user', async () => {
+    let finish;
+    mockRuntime.execute.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    runBtn().click();
+    await vi.waitFor(() => expect(runBtn().dataset.state).toBe('stop'));
+    const handler = mockRuntime.set_input_handler.mock.calls.at(-1)[0];
+    const pending = handler('int');
+    expect(mockRecorder.setWaitingForUser).toHaveBeenLastCalledWith(true);
+    submit('5');
+    await pending;
+    expect(mockRecorder.setWaitingForUser).toHaveBeenLastCalledWith(false);
+    finish();
+    await vi.waitFor(() => expect(runBtn().dataset.state).toBe('run'));
+    expect(mockRecorder.setWaitingForUser).toHaveBeenLastCalledWith(true);
+  });
+
+  it('enables Save GIF and shows the readout once two frames are recorded', () => {
+    const { onStats } = mockRecorder.options;
+    onStats({ frames: 1, lengthMs: 0, bytes: 100, limit: null });
+    expect(saveGifBtn().disabled).toBe(true);
+    expect(gifMeter().hidden).toBe(true);
+    onStats({ frames: 2, lengthMs: 24_000, bytes: 3.1 * MB, limit: null });
+    expect(saveGifBtn().disabled).toBe(false);
+    expect(gifMeter().hidden).toBe(false);
+    expect(gifMeter().textContent).toBe('GIF 0:24 · 3.1 MB');
+    onStats({ frames: 0, lengthMs: 0, bytes: 0, limit: null });
+    expect(saveGifBtn().disabled).toBe(true);
+    expect(gifMeter().hidden).toBe(true);
+  });
+
+  it('saves the GIF under the chosen name and reports it in the console', async () => {
+    mockRecorder.canSave.mockReturnValue(true);
+    let finishSave;
+    mockRecorder.save.mockReturnValue(new Promise(resolve => { finishSave = resolve; }));
+    vi.spyOn(window, 'prompt').mockReturnValue('bounce');
+    const anchor = captureDownload();
+    // The previous test left the button disabled; a disabled button ignores clicks.
+    mockRecorder.options.onStats({ frames: 2, lengthMs: 1000, bytes: 1000, limit: null });
+    expect(saveGifBtn().disabled).toBe(false);
+
+    saveGifBtn().click();
+    expect(saveGifBtn().disabled).toBe(true);
+    mockRecorder.options.onStats({ frames: 5, lengthMs: 1000, bytes: 1000, limit: null });
+    expect(saveGifBtn().disabled).toBe(true);
+
+    finishSave({ bytes: new Uint8Array([1, 2, 3]), lengthMs: 60_000, size: 8.4 * MB, limit: 'time' });
+    await vi.waitFor(() => expect(anchor()?.download).toBe('bounce.gif'));
+    expect(URL.createObjectURL.mock.calls[0][0].type).toBe('image/gif');
+    expect(anchor().click).toHaveBeenCalled();
+    await vi.waitFor(async () => expect((await consoleText()).at(-1)).toContain('GIF saved: first 1:00, 8.4 MB (time limit reached).'));
+    expect(saveGifBtn().disabled).toBe(false);
+  });
+
+  it('ends the clip at the click, not after the name prompt', async () => {
+    mockRecorder.canSave.mockReturnValue(true);
+    mockRecorder.save.mockRejectedValue(new Error('stop here'));
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    vi.spyOn(window, 'prompt').mockImplementation(() => {
+      clock.mockReturnValue(9000);
+      return 'slow';
+    });
+    saveGifBtn().click();
+    expect(mockRecorder.save).toHaveBeenCalledWith(1000);
+    await vi.waitFor(async () => expect((await consoleText()).at(-1)).toContain('stop here'));
+  });
+
+  it('does nothing when the name prompt is cancelled', () => {
+    mockRecorder.canSave.mockReturnValue(true);
+    vi.spyOn(window, 'prompt').mockReturnValue(null);
+    saveGifBtn().click();
+    expect(mockRecorder.save).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed save in the console', async () => {
+    mockRecorder.canSave.mockReturnValue(true);
+    mockRecorder.save.mockRejectedValue(new Error('boom'));
+    vi.spyOn(window, 'prompt').mockReturnValue('broken');
+    saveGifBtn().click();
+    await vi.waitFor(async () => expect((await consoleText()).at(-1)).toContain('Could not save GIF: boom'));
   });
 });
