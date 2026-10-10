@@ -82,6 +82,18 @@ describe('createFrameEncoder', () => {
     expect(pictures[1]).toEqual(corners);
   });
 
+  it('gives each pixel its own nearest palette color', () => {
+    // (8, 12, 24) shares a coarse color bin with the navy background but is
+    // nearer to the dark box. Coming first, it must not decide the background's color.
+    const NAVY = [10, 15, 31];
+    const picture = withBox(withBox(solid(NAVY), 0, 0, 1, 1, [8, 12, 24]), 10, 10, 14, 14, [6, 10, 20]);
+    const encoder = createFrameEncoder({ width: W, height: H });
+    encoder.addFrame(picture, 0, false);
+    const { pictures } = decode(encoder.finish(100, false).bytes);
+    expect(Array.from(pictures[0].slice(4, 7))).toEqual(NAVY);
+    expect(Array.from(pictures[0].slice(-4, -1))).toEqual(NAVY);
+  });
+
   it('merges an unchanged picture into the previous frame', () => {
     const encoder = createFrameEncoder({ width: W, height: H });
     encoder.addFrame(BG, 0, false);

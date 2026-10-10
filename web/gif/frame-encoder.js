@@ -14,10 +14,53 @@ import { MAX_BYTES, MAX_PLAYBACK_MS, waitCap } from './limits.js';
 // functions sit on the default export; Vite and vitest load the ES one, whose
 // functions are named exports (and whose default export is only GIFEncoder).
 const gifenc = typeof gifencModule.default?.quantize === 'function' ? gifencModule.default : gifencModule;
-const { quantize, applyPalette } = gifenc;
+const { quantize } = gifenc;
 
 /** GIF players stretch shorter delays, so no frame is shorter than this. */
 export const MIN_DELAY_CS = 2;
+
+/** Index of the palette color nearest to `r, g, b`. */
+function nearestColor(r, g, b, palette) {
+  let best = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < palette.length; i++) {
+    const [pr, pg, pb] = palette[i];
+    const distance = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
+    if (distance < bestDistance) {
+      best = i;
+      bestDistance = distance;
+      if (distance === 0) break;
+    }
+  }
+  return best;
+}
+
+/**
+ * Palette index of each pixel. gifenc's applyPalette remembers one answer per
+ * coarse color bin, so the first pixel seen in a bin decides the color of all
+ * the others, and a background can take the shade of a darker edge pixel.
+ * This remembers answers per exact color instead.
+ */
+function paletteIndices(rgba, palette) {
+  const words = new Uint32Array(rgba.buffer, rgba.byteOffset, rgba.length / 4);
+  const indices = new Uint8Array(words.length);
+  const known = new Map();
+  let lastColor = -1;
+  let lastIndex = 0;
+  for (let i = 0; i < words.length; i++) {
+    const color = words[i] & 0xffffff;
+    if (color !== lastColor) {
+      lastColor = color;
+      lastIndex = known.get(color);
+      if (lastIndex === undefined) {
+        lastIndex = nearestColor(color & 0xff, (color >> 8) & 0xff, color >> 16, palette);
+        known.set(color, lastIndex);
+      }
+    }
+    indices[i] = lastIndex;
+  }
+  return indices;
+}
 
 /**
  * Smallest rectangle containing every pixel that differs, or `null` if none does.
@@ -88,7 +131,7 @@ function encodeRect(previous, next, frameWidth, rect) {
 
   // One palette slot stays free for the transparent index.
   const palette = quantize(sample, previous ? 255 : 256);
-  const indices = applyPalette(crop, palette);
+  const indices = paletteIndices(crop, palette);
   if (!previous) return gifFrame({ x, y, width, height, palette, indices });
 
   const transparentIndex = palette.length;
