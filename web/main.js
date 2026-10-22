@@ -41,7 +41,7 @@ import {
 } from "@codemirror/commands"
 import {
   autocompletion, closeBrackets,
-  closeBracketsKeymap, completionKeymap
+  closeBracketsKeymap, completionKeymap, acceptCompletion
 } from "@codemirror/autocomplete"
 import { linter, lintGutter, lintKeymap, setDiagnostics } from "@codemirror/lint";
 // Language support (your Lezer parser compiled to quanta.js)
@@ -122,7 +122,9 @@ const fourSpaceIndent = indentUnit.of("    "); // 4 spaces
  */
 const insertFourSpaces = keymap.of([{
   key: "Tab",
-  run: ({ state, dispatch }) => {
+  run: view => {
+    if (acceptCompletion(view)) return true;
+    const { state, dispatch } = view;
     dispatch(
       state.replaceSelection("    ") // 4 spaces
     );

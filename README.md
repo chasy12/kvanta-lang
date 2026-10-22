@@ -416,6 +416,15 @@ func main() {
 }
 ```
 
+### Autocomplete
+
+The editor suggests while you type. Press `Tab` or `Enter` to accept a suggestion.
+Block templates (`if`, `else if`, `for`, `for each`, `while`, `func`, `func main`,
+`func mouse`, `func keyboard`, `global`, `animation`, `int variable`, …) and drawing
+calls (`circle`, `rectangle`, `setFigureColor`, …) insert ready-made code; `Tab` jumps
+between the fields to fill in. `Color::` and `Key::` list the available names, and
+variables and functions you declared are suggested as you type.
+
 ## Installation & Build
 
 ### Prerequisites

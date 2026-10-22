@@ -75,7 +75,7 @@
 import {parser} from "../grammar/grammar.js";
 import {LRLanguage, LanguageSupport, indentNodeProp, foldNodeProp, foldInside, delimitedIndent, HighlightStyle, syntaxHighlighting} from "@codemirror/language"
 import {styleTags, tags as t} from "@lezer/highlight"
-import {completeFromList} from "@codemirror/autocomplete"
+import {quantaCompletionSource} from "./completions"
 
 export const quantaHighlightStyle = HighlightStyle.define([
   // keywords
@@ -138,92 +138,8 @@ export const QuantaLanguage = LRLanguage.define({
   }
 })
 
-export const rawCompletionItems = [
-  {label: "if", type: "keyword"},
-  {label: "else", type: "keyword", info: 'else if (condition) { ... } or else { ... }'},
-  {label: "for", type: "keyword", info: 'for value in values { ... } or for i in (0..10) { ... }'},
-  {label: "in", type: "keyword"},
-  {label: "while", type: "keyword"},
-  {label: "break", type: "keyword", info: 'break; exits the innermost loop'},
-  {label: "continue", type: "keyword", info: 'continue; starts the next iteration of the innermost loop'},
-  {label: "return", type: "keyword"},
-  {label: "func", type: "keyword"},
-  {label: "global", type: "keyword"},
-  {label: "array", type: "keyword", info: 'array<int, 2> values = {1, 2}; or int values[2];'},
-  {label: "bool", type: "keyword"},
-  {label: "int", type: "keyword"},
-  {label: "float", type: "keyword"},
-  {label: "string", type: "keyword", info: 'Declare a string variable, or use string(value) to convert a value to text.'},
-  {label: "color", type: "keyword"},
-  {label: "len", type: "function", info: 'len(array) returns the number of outer elements as an int'},
-  {label: "Color", type: "keyword"},
-  {label: "Red", type: "keyword"},
-  {label: "DarkRed", type: "keyword"},
-  {label: "LightRed", type: "keyword"},
-
-  {label: "Green", type: "keyword"},
-  {label: "DarkGreen", type: "keyword"},
-  {label: "LightGreen", type: "keyword"},
-
-  {label: "Blue", type: "keyword"},
-  {label: "DarkBlue", type: "keyword"},
-  {label: "LightBlue", type: "keyword"},
-
-  {label: "Yellow", type: "keyword"},
-  {label: "DarkYellow", type: "keyword"},
-  {label: "LightYellow", type: "keyword"},
-
-  {label: "Orange", type: "keyword"},
-  {label: "DarkOrange", type: "keyword"},
-  {label: "LightOrange", type: "keyword"},
-
-  {label: "Pink", type: "keyword"},
-  {label: "LightPink", type: "keyword"},
-  {label: "HotPink", type: "keyword"},
-
-  {label: "Purple", type: "keyword"},
-  {label: "Violet", type: "keyword"},
-  {label: "DarkViolet", type: "keyword"},
-  {label: "LightViolet", type: "keyword"},
-
-  {label: "Brown", type: "keyword"},
-  {label: "DarkBrown", type: "keyword"},
-  {label: "LightBrown", type: "keyword"},
-
-  {label: "Cyan", type: "keyword"},
-  {label: "DarkCyan", type: "keyword"},
-  {label: "LightCyan", type: "keyword"},
-
-  {label: "Black", type: "keyword"},
-  {label: "Gray", type: "keyword"},
-  {label: "DarkGray", type: "keyword"},
-  {label: "LightGray", type: "keyword"},
-  {label: "White", type: "keyword"},
-  {label: "Background", type: "keyword"},
-  {label: "Transparent", type: "keyword"},
-  {label: "Random", type: "keyword"},
-
-  {label: "circle", type: "function"},
-  {label: "rectangle", type: "function"},
-  {label: "line", type: "function"},
-  {label: "setLineColor", type: "function"},
-  {label: "setFigureColor", type: "function"},
-  {label: "setFps", type: "function"},
-  {label: "text", type: "function", info: 'text(x, y, content, color: ..., size: ..., font: ..., align: ..., bold: ..., italic: ..., lineHeight: ...)'},
-  {label: "setTextColor", type: "function"},
-  {label: "setTextSize", type: "function"},
-  {label: "setTextFont", type: "function"},
-  {label: "setTextAlign", type: "function"},
-  {label: "setTextBold", type: "function"},
-  {label: "setTextItalic", type: "function"},
-  {label: "setTextLineHeight", type: "function"},
-  {label: "print", type: "function"},
-  {label: "read", type: "function"},
-  {label: "input", type: "function"},
-];
-
 export const quantaCompletion = QuantaLanguage.data.of({
-  autocomplete: completeFromList(rawCompletionItems)
+  autocomplete: quantaCompletionSource
 })
 
 export function quanta() {
