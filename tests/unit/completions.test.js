@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { CompletionContext } from '@codemirror/autocomplete';
 import { staticCompletions, declaredNames, quantaCompletionSource } from '../../web/completions.ts';
+import { setLanguage } from '../../web/i18n.js';
 import { quantaLanguageSupport } from '../../web/quanta-support.ts';
 
 const labels = staticCompletions.map(item => item.label);
@@ -102,5 +103,22 @@ describe('quantaCompletionSource', () => {
     expect(complete('// ci|')).toBeNull();
     expect(complete('|')).toBeNull();
     expect(complete('|', true)).not.toBeNull();
+  });
+
+  it('describes templates in one or two words, in the interface language', () => {
+    setLanguage('uk');
+    const uk = complete('fo|').options.find(o => o.label === 'for');
+    expect(uk.detail).toBe('повторити');
+    setLanguage('en');
+    const en = complete('fo|').options.find(o => o.label === 'for');
+    expect(en.detail).toBe('repeat');
+    setLanguage('uk');
+  });
+
+  it('never attaches long explanations', () => {
+    for (const option of complete('|', true).options) {
+      expect(option.info).toBeUndefined();
+      expect((option.detail ?? '').length).toBeLessThanOrEqual(20);
+    }
   });
 });

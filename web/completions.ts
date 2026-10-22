@@ -3,6 +3,7 @@ import {
   type Completion, type CompletionContext, type CompletionResult,
 } from "@codemirror/autocomplete"
 import {syntaxTree} from "@codemirror/language"
+import {getLanguage} from "./i18n.js"
 
 const COLOR_NAMES = [
   "Red", "DarkRed", "LightRed",
@@ -25,24 +26,23 @@ const KEY_NAMES = [
 
 const KEYWORDS: Completion[] = [
   {label: "in", type: "keyword"},
-  {label: "break", type: "keyword", info: "break; exits the innermost loop"},
-  {label: "continue", type: "keyword", info: "continue; starts the next iteration of the innermost loop"},
+  {label: "break", type: "keyword"},
+  {label: "continue", type: "keyword"},
   {label: "return", type: "keyword"},
   {label: "true", type: "keyword"},
   {label: "false", type: "keyword"},
   {label: "bool", type: "type"},
   {label: "int", type: "type"},
   {label: "float", type: "type"},
-  {label: "string", type: "type", info: "Declare a string variable, or use string(value) to convert a value to text."},
+  {label: "string", type: "type"},
   {label: "color", type: "type"},
-  {label: "array", type: "type", info: "array<int, 2> values = {1, 2}; or int values[2];"},
+  {label: "array", type: "type"},
 ]
 
 // Typing `Color` or `Key` continues with `::` and opens the list of names.
 const NAMESPACES: Completion[] = ["Color", "Key"].map(name => ({
   label: name,
   type: "namespace",
-  detail: "…::",
   apply: (view, _completion, from, to) => {
     view.dispatch({
       changes: {from, to, insert: `${name}::`},
@@ -57,76 +57,128 @@ const COLORS: Completion[] = COLOR_NAMES.map(name => ({label: `Color::${name}`, 
 
 // Calls whose arguments the child fills in with Tab.
 const CALLS: Completion[] = [
-  call("circle", "circle(${x}, ${y}, ${radius})", "x, y, radius"),
-  call("rectangle", "rectangle(${x1}, ${y1}, ${x2}, ${y2})", "x1, y1, x2, y2"),
-  call("line", "line(${x1}, ${y1}, ${x2}, ${y2})", "x1, y1, x2, y2"),
-  call("arc", "arc(${x}, ${y}, ${radius}, ${from}, ${to})", "x, y, radius, from, to"),
-  call("polygon", "polygon(${x1}, ${y1}, ${x2}, ${y2}, ${x3}, ${y3})", "3 or more points"),
-  call("text", "text(${x}, ${y}, ${\"Hello\"})", "x, y, content"),
-  call("setFigureColor", "setFigureColor(Color::${Red})", "fill color"),
-  call("setLineColor", "setLineColor(Color::${Black})", "outline color"),
-  call("setLineWidth", "setLineWidth(${3})", "outline width"),
+  call("circle", "circle(${x}, ${y}, ${r})"),
+  call("rectangle", "rectangle(${x1}, ${y1}, ${x2}, ${y2})"),
+  call("line", "line(${x1}, ${y1}, ${x2}, ${y2})"),
+  call("arc", "arc(${x}, ${y}, ${r}, ${a1}, ${a2})"),
+  call("polygon", "polygon(${x1}, ${y1}, ${x2}, ${y2}, ${x3}, ${y3})"),
+  call("text", "text(${x}, ${y}, ${\"Hello\"})"),
+  call("setFigureColor", "setFigureColor(Color::${Red})"),
+  call("setLineColor", "setLineColor(Color::${Black})"),
+  call("setLineWidth", "setLineWidth(${3})"),
   call("setTextColor", "setTextColor(Color::${White})"),
   call("setTextSize", "setTextSize(${24})"),
   call("setTextFont", "setTextFont(\"${system-ui}\")"),
-  call("setTextAlign", "setTextAlign(\"${center}\")", "left, center or right"),
+  call("setTextAlign", "setTextAlign(\"${center}\")"),
   call("setTextBold", "setTextBold(${true})"),
   call("setTextItalic", "setTextItalic(${true})"),
   call("setTextLineHeight", "setTextLineHeight(${1.2})"),
-  call("setFps", "setFps(${30})", "frames per second"),
-  call("sleep", "sleep(${1000})", "milliseconds"),
+  call("setFps", "setFps(${30})"),
+  call("sleep", "sleep(${1000})"),
   call("print", "print(${\"Hello\"})"),
-  call("read", "read(${variable})", "read a value from the console"),
+  call("read", "read(${x})"),
   call("input", "input()"),
-  call("len", "len(${array})", "number of elements"),
-  call("rgb", "rgb(${r}, ${g}, ${b})", "0–255 each"),
+  call("len", "len(${arr})"),
+  call("rgb", "rgb(${r}, ${g}, ${b})"),
   call("abs", "abs(${x})"),
   call("round", "round(${x})"),
   call("ceil", "ceil(${x})"),
   call("floor", "floor(${x})"),
   call("sqrt", "sqrt(${x})"),
-  call("decimal", "decimal(${x})", "int to float"),
-  call("random", "random(${1}, ${10})", "random int from a to b"),
-  call("animate", "animate()", "start animation mode"),
-  call("frame", "frame()", "show the frame and wait for the next"),
-  call("clear", "clear()", "clear the canvas"),
+  call("decimal", "decimal(${x})"),
+  call("random", "random(${1}, ${10})"),
+  call("animate", "animate()"),
+  call("frame", "frame()"),
+  call("clear", "clear()"),
 ]
 
-function call(name: string, template: string, detail = ""): Completion {
-  return snippetCompletion(template, {label: name, type: "function", detail})
+function call(name: string, template: string): Completion {
+  return snippetCompletion(template, {label: name, type: "function"})
 }
 
-function block(label: string, template: string, detail: string, boost = 0): Completion {
-  return snippetCompletion(template, {label, type: "text", detail, boost})
+function block(label: string, template: string, boost = 0): Completion {
+  return snippetCompletion(template, {label, type: "text", boost})
 }
 
 // Blocks to build programs from: each field is a Tab stop.
 const BLOCKS: Completion[] = [
-  block("if", "if (${condition}) {\n    ${}\n}", "if block", 2),
-  block("else", "else {\n    ${}\n}", "else block", 2),
-  block("else if", "else if (${condition}) {\n    ${}\n}", "else if block"),
-  block("for", "for ${i} in (${0}..${10}) {\n    ${}\n}", "repeat a number of times", 2),
-  block("for each", "for ${item} in ${values} {\n    ${}\n}", "go through an array"),
-  block("while", "while (${condition}) {\n    ${}\n}", "repeat while true", 2),
-  block("while true", "while (true) {\n    ${}\n}", "repeat forever"),
-  block("func", "func ${name}(${}) {\n    ${}\n}", "function", 2),
-  block("func main", "func main() {\n    ${}\n}", "program start"),
-  block("func result", "func ${name}(${int a}) -> ${int} {\n    return ${};\n}", "function with a result"),
-  block("func mouse", "func mouse(int x, int y) {\n    ${}\n}", "on mouse click"),
-  block("func keyboard", "func keyboard(int key) {\n    if (key == Key::${Space}) {\n        ${}\n    }\n}", "on key press"),
-  block("global", "global {\n    ${int score = 0;}\n}", "variables for all functions", 1),
-  block("animation", "animate();\nsetFps(${30});\nwhile (true) {\n    clear();\n    ${}\n    frame();\n}", "animation loop"),
-  block("int variable", "int ${name} = ${0};", "whole number"),
-  block("float variable", "float ${name} = ${0.0};", "decimal number"),
-  block("string variable", "string ${name} = \"${text}\";", "text"),
-  block("bool variable", "bool ${name} = ${true};", "true or false"),
-  block("color variable", "color ${name} = Color::${Red};", "color"),
-  block("array variable", "array<int, ${3}> ${name} = {${1, 2, 3}};", "list of values"),
+  block("if", "if (${x > 0}) {\n    ${}\n}", 2),
+  block("else", "else {\n    ${}\n}", 2),
+  block("else if", "else if (${x > 0}) {\n    ${}\n}"),
+  block("for", "for ${i} in (${0}..${10}) {\n    ${}\n}", 2),
+  block("for each", "for ${v} in ${arr} {\n    ${}\n}"),
+  block("while", "while (${x < 10}) {\n    ${}\n}", 2),
+  block("while true", "while (true) {\n    ${}\n}"),
+  block("func", "func ${f}(${}) {\n    ${}\n}", 2),
+  block("func main", "func main() {\n    ${}\n}"),
+  block("func result", "func ${f}(${int a}) -> ${int} {\n    return ${};\n}"),
+  block("func mouse", "func mouse(int x, int y) {\n    ${}\n}"),
+  block("func keyboard", "func keyboard(int key) {\n    if (key == Key::${Space}) {\n        ${}\n    }\n}"),
+  block("global", "global {\n    ${int score = 0;}\n}", 1),
+  block("animation", "animate();\nsetFps(${30});\nwhile (true) {\n    clear();\n    ${}\n    frame();\n}"),
+  block("int variable", "int ${x} = ${0};"),
+  block("float variable", "float ${x} = ${0.0};"),
+  block("string variable", "string ${x} = \"${abc}\";"),
+  block("bool variable", "bool ${x} = ${true};"),
+  block("color variable", "color ${x} = Color::${Red};"),
+  block("array variable", "array<int, ${3}> ${x} = {${1, 2, 3}};"),
 ]
 
 export const staticCompletions: Completion[] = [
   ...BLOCKS, ...CALLS, ...KEYWORDS, ...NAMESPACES, ...COLORS,
 ]
+
+
+// One short phrase per entry, in the interface language: [en, uk].
+const HINTS: Record<string, [string, string]> = {
+  "if": ["if", "якщо"],
+  "else": ["otherwise", "інакше"],
+  "else if": ["or if", "або якщо"],
+  "for": ["repeat", "повторити"],
+  "for each": ["each item", "кожен елемент"],
+  "while": ["while true", "поки правда"],
+  "while true": ["forever", "завжди"],
+  "func": ["function", "функція"],
+  "func main": ["start", "початок"],
+  "func result": ["with result", "з результатом"],
+  "func mouse": ["on click", "клік мишею"],
+  "func keyboard": ["on key", "натискання клавіші"],
+  "global": ["shared", "спільні змінні"],
+  "animation": ["animation", "анімація"],
+  "int variable": ["integer", "ціле число"],
+  "float variable": ["decimal", "дробове число"],
+  "string variable": ["text", "текст"],
+  "bool variable": ["yes / no", "так / ні"],
+  "color variable": ["color", "колір"],
+  "array variable": ["list", "список"],
+  "circle": ["circle", "коло"],
+  "rectangle": ["rectangle", "прямокутник"],
+  "line": ["line", "лінія"],
+  "arc": ["arc", "дуга"],
+  "polygon": ["polygon", "многокутник"],
+  "text": ["write text", "написати текст"],
+  "setFigureColor": ["fill color", "колір заливки"],
+  "setLineColor": ["line color", "колір лінії"],
+  "setLineWidth": ["line width", "товщина лінії"],
+  "setFps": ["speed", "швидкість"],
+  "sleep": ["wait, ms", "пауза, мс"],
+  "print": ["to console", "в консоль"],
+  "read": ["ask", "запитати"],
+  "len": ["length", "довжина"],
+  "rgb": ["own color", "свій колір"],
+  "random": ["random", "випадкове"],
+  "animate": ["animation", "анімація"],
+  "frame": ["next frame", "наступний кадр"],
+  "clear": ["clear", "очистити"],
+}
+
+function localized(options: readonly Completion[]): Completion[] {
+  const index = getLanguage() === "uk" ? 1 : 0
+  return options.map(option => {
+    const hint = HINTS[option.label]
+    return hint ? {...option, detail: hint[index]} : option
+  })
+}
 
 const TYPE_WORDS = "int|float|bool|string|color"
 const DECLARATION = new RegExp(`\\b(?:${TYPE_WORDS})\\s+([A-Za-z_]\\w*)|\\barray<[^>]*>\\s+([A-Za-z_]\\w*)|\\bfor\\s+([A-Za-z_]\\w*)\\s+in\\b`, "g")
@@ -175,14 +227,14 @@ export function quantaCompletionSource(context: CompletionContext): CompletionRe
 
   const phrase = context.matchBefore(/\b(?:else|for|while|func|int|float|string|bool|color|array) \w*/)
   if (phrase) {
-    return {from: phrase.from, options: BLOCKS.filter(b => b.label.includes(" ")), validFor: /^[\w ]*$/}
+    return {from: phrase.from, options: localized(BLOCKS.filter(b => b.label.includes(" "))), validFor: /^[\w ]*$/}
   }
 
   const word = context.matchBefore(/\w+/)
   if (!word && !context.explicit) return null
   return {
     from: word ? word.from : context.pos,
-    options: [...declaredNames(context.state.doc.toString()), ...staticCompletions],
+    options: [...declaredNames(context.state.doc.toString()), ...localized(staticCompletions)],
     validFor: /^\w*$/,
   }
 }
