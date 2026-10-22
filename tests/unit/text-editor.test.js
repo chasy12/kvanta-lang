@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parser } from '../../grammar/grammar.js';
-import { rawCompletionItems } from '../../web/quanta-support.ts';
+import { staticCompletions as rawCompletionItems } from '../../web/completions.ts';
 
 describe('text support in the editor', () => {
   it('recognizes string literals and named text options', () => {
