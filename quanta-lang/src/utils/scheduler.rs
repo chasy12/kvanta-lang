@@ -11,7 +11,7 @@ use crate::utils::canvas::Canvas;
 const YIELD_BUDGET_MS: f64 = 8.0;
 
 /// Frame rate used until the program calls `setFps`.
-const DEFAULT_FPS: i32 = 30;
+const DEFAULT_FPS: i32 = 10;
 
 /// A display refresh that lands this close before the target time still counts,
 /// so a 60 fps target on a 60 Hz display doesn't skip frames because of jitter.
