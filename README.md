@@ -349,7 +349,7 @@ Global blocks are accessible from all functions.
 ```
 animate()       // enter animation mode (nothing renders until frame() is called)
 frame()         // show the current canvas, then wait for the next frame
-setFps(n)       // set the frame rate frame() keeps (default: 30)
+setFps(n)       // set the frame rate frame() keeps (default: 10)
 setFps(0)       // no cap: one frame per screen refresh (e.g. 60, 120 or 144 fps)
 sleep(ms)       // pause execution for ms milliseconds
 ```
